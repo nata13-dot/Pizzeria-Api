@@ -1,0 +1,1 @@
+<?php namespace App\Models;use Illuminate\Database\Eloquent\Model;class CashMovement extends Model{protected $fillable=['cash_day_id','user_id','type','amount','category','description','reference_type','reference_id'];}

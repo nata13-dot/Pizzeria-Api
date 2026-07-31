@@ -1,0 +1,7 @@
+<?php
+namespace Tests\Feature;
+use App\Models\Role;use App\Models\User;use Illuminate\Foundation\Testing\RefreshDatabase;use Laravel\Sanctum\Sanctum;use Tests\TestCase;
+class AuthorizationTest extends TestCase{use RefreshDatabase;
+ public function test_cashier_cannot_change_settings_or_inventory_base():void{$this->seed();$cashier=User::create(['name'=>'Caja','email'=>'caja@test.local','password'=>'password','role_id'=>Role::where('slug','cajero')->value('id'),'branch_id'=>User::first()->branch_id]);Sanctum::actingAs($cashier);$this->putJson('/api/settings',['settings'=>['half_extra'=>20]])->assertForbidden();$this->postJson('/api/ingredients',['name'=>'No permitido','base_unit_id'=>1])->assertForbidden();$this->getJson('/api/ingredients')->assertOk();}
+ public function test_kitchen_and_delivery_have_separate_operational_access():void{$this->seed();$branch=User::first()->branch_id;$kitchen=User::create(['name'=>'Cocina','email'=>'cocina@test.local','password'=>'password','role_id'=>Role::where('slug','cocina')->value('id'),'branch_id'=>$branch]);Sanctum::actingAs($kitchen);$this->getJson('/api/kitchen/orders')->assertOk();$this->getJson('/api/delivery/orders')->assertForbidden();$delivery=User::create(['name'=>'Reparto','email'=>'reparto@test.local','password'=>'password','role_id'=>Role::where('slug','repartidor')->value('id'),'branch_id'=>$branch]);Sanctum::actingAs($delivery);$this->getJson('/api/delivery/orders')->assertOk();$this->getJson('/api/kitchen/orders')->assertForbidden();}
+}

@@ -16,4 +16,12 @@ class ExampleTest extends TestCase
 
         $response->assertStatus(200);
     }
+
+    public function test_private_network_origins_are_allowed_for_cors(): void
+    {
+        $response = $this->withHeader('Origin', 'http://192.168.1.50:3000')->get('/');
+
+        $response->assertStatus(200);
+        $response->assertHeader('Access-Control-Allow-Origin', 'http://192.168.1.50:3000');
+    }
 }

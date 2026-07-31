@@ -1,0 +1,1 @@
+<?php namespace App\Models;use Illuminate\Database\Eloquent\Model;class DailyReport extends Model{protected $fillable=['branch_id','date','data','path'];protected function casts():array{return['date'=>'date','data'=>'array'];}}

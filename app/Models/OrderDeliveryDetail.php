@@ -1,0 +1,1 @@
+<?php namespace App\Models;use Illuminate\Database\Eloquent\Model;class OrderDeliveryDetail extends Model{protected $fillable=['order_id','recipient','phone','address','references','map_url','payment_received'];}

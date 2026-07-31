@@ -1,0 +1,1 @@
+<?php namespace App\Models;use Illuminate\Database\Eloquent\Model;class ReportSnapshot extends Model{protected $fillable=['branch_id','type','from','to','filters','data'];protected function casts():array{return['from'=>'datetime','to'=>'datetime','filters'=>'array','data'=>'array'];}}

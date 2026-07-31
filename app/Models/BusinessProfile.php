@@ -1,0 +1,1 @@
+<?php namespace App\Models;use Illuminate\Database\Eloquent\Model;class BusinessProfile extends Model{protected $fillable=['branch_id','name','phone','address','logo_path','primary_color','tax_id','receipt_footer'];}

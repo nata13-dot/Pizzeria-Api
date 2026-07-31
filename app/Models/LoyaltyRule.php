@@ -1,0 +1,1 @@
+<?php namespace App\Models;use Illuminate\Database\Eloquent\Model;class LoyaltyRule extends Model{protected $fillable=['branch_id','name','type','threshold','points','expires_days','conditions','courtesy_eligible','active'];protected function casts():array{return['conditions'=>'array','courtesy_eligible'=>'boolean','active'=>'boolean'];}}

@@ -1,0 +1,1 @@
+<?php namespace App\Models;use Illuminate\Database\Eloquent\Model;class OrderItemIngredient extends Model{protected $fillable=['order_item_id','ingredient_id','quantity'];public function ingredient(){return $this->belongsTo(Ingredient::class);}}
