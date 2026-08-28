@@ -24,4 +24,11 @@ class ExampleTest extends TestCase
         $response->assertStatus(200);
         $response->assertHeader('Access-Control-Allow-Origin', 'http://192.168.1.50:3000');
     }
+
+    public function test_unauthenticated_api_requests_return_unauthorized_instead_of_redirecting(): void
+    {
+        $this->get('/api/catalogs/suppliers')
+            ->assertUnauthorized()
+            ->assertJsonPath('message', 'Unauthenticated.');
+    }
 }

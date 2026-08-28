@@ -13,6 +13,7 @@ use App\Services\InventoryService;
 use App\Services\LoyaltyService;
 use App\Services\OrderService;
 use App\Services\PushService;
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -24,7 +25,9 @@ class RunDailyOperations extends Command
 
     public function handle(): int
     {
-        app(OrderService::class)->expirePending();
+        $orders = app(OrderService::class);
+        $orders->expirePending();
+        $orders->dispatchScheduled();
         app(LoyaltyService::class)->expire();
         Ingredient::each(fn ($i) => app(InventoryService::class)->refreshAlerts($i));
         Alert::whereNull('resolved_at')->where('severity', 'critical')->where('created_at', '>=', now()->subMinutes(6))->get()->groupBy('branch_id')->each(function ($alerts, $branch) {
@@ -38,14 +41,38 @@ class RunDailyOperations extends Command
                 }
             });
         });
+        $this->generateReports(false);
         if ($this->option('report')) {
-            foreach (Branch::where('active', true)->get() as $b) {
-                $data = app(CashReportService::class)->summary($b->id, today()->toDateString());
-                DailyReport::updateOrCreate(['branch_id' => $b->id, 'date' => today()], ['data' => $data]);
-                User::where('branch_id', $b->id)->whereHas('role', fn ($q) => $q->where('slug', 'administrador'))->each(fn ($u) => $u->notify(new SystemAlertNotification('Reporte diario disponible', 'El reporte diario ya está listo.', ['date' => today()->toDateString()])));
-            }
+            $this->generateReports(true);
         }
 
-return self::SUCCESS;
+        return self::SUCCESS;
+    }
+
+    private function generateReports(bool $currentDay): void
+    {
+        foreach (Branch::where('active', true)->get() as $branch) {
+            $localToday = CarbonImmutable::now($branch->timezone ?: config('app.timezone'))->startOfDay();
+            $date = ($currentDay ? $localToday : $localToday->subDay())->toDateString();
+            $data = app(CashReportService::class)->summary($branch->id, $date);
+            $report = DailyReport::firstOrCreate(
+                ['branch_id' => $branch->id, 'date' => $date],
+                ['data' => $data],
+            );
+            if ($currentDay && ! $report->wasRecentlyCreated) {
+                $report->update(['data' => $data]);
+            }
+            if (! $report->wasRecentlyCreated) {
+                continue;
+            }
+
+            User::where('branch_id', $branch->id)
+                ->whereHas('role', fn ($query) => $query->where('slug', 'administrador'))
+                ->each(fn ($user) => $user->notify(new SystemAlertNotification(
+                    'Reporte diario disponible',
+                    "El reporte del {$date} ya está listo.",
+                    ['date' => $date],
+                )));
+        }
     }
 }

@@ -9,5 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('pizzeria:daily-operations')->everyFiveMinutes()->withoutOverlapping();
-Schedule::command('pizzeria:daily-operations --report')->dailyAt('23:55')->withoutOverlapping();
 Schedule::command('pizzeria:backup')->dailyAt('02:00')->withoutOverlapping();

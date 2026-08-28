@@ -1,13 +1,113 @@
 <?php
-use Illuminate\Database\Migrations\Migration;use Illuminate\Database\Schema\Blueprint;use Illuminate\Support\Facades\Schema;
-return new class extends Migration{public function up():void{
- Schema::create('orders',function(Blueprint $t){$t->id();$t->foreignId('branch_id')->nullable()->constrained()->nullOnDelete();$t->foreignId('user_id')->constrained();$t->foreignId('customer_id')->nullable();$t->date('order_date');$t->unsignedInteger('daily_number');$t->enum('status',['draft','pending_payment','confirmed','kitchen_pending','preparing','prepared','ready','on_way','delivered','cancelled']);$t->enum('type',['pickup','whatsapp','delivery','dine_in']);$t->dateTime('scheduled_at')->nullable();$t->dateTime('pending_expires_at')->nullable();$t->decimal('subtotal',12,2)->default(0);$t->decimal('discount',12,2)->default(0);$t->decimal('delivery_fee',12,2)->default(0);$t->decimal('total',12,2)->default(0);$t->boolean('courtesy')->default(false);$t->boolean('inventory_deducted')->default(false);$t->json('stock_warnings')->nullable();$t->text('notes')->nullable();$t->timestamps();$t->index(['branch_id','order_date','daily_number']);});
- Schema::create('order_items',function(Blueprint $t){$t->id();$t->foreignId('order_id')->constrained()->cascadeOnDelete();$t->foreignId('product_variant_id')->nullable()->constrained()->nullOnDelete();$t->foreignId('combo_id')->nullable()->constrained()->nullOnDelete();$t->string('name');$t->decimal('quantity',10,2);$t->decimal('unit_price',12,2);$t->decimal('total',12,2);$t->text('notes')->nullable();$t->timestamps();});
- Schema::create('order_item_flavors',function(Blueprint $t){$t->id();$t->foreignId('order_item_id')->constrained()->cascadeOnDelete();$t->foreignId('product_flavor_id')->constrained();$t->decimal('ratio',8,4)->default(1);$t->timestamps();});
- Schema::create('order_item_modifiers',function(Blueprint $t){$t->id();$t->foreignId('order_item_id')->constrained()->cascadeOnDelete();$t->foreignId('modifier_id')->constrained();$t->string('name');$t->decimal('price',12,2);$t->timestamps();});
- Schema::create('order_item_ingredients',function(Blueprint $t){$t->id();$t->foreignId('order_item_id')->constrained()->cascadeOnDelete();$t->foreignId('ingredient_id')->constrained();$t->decimal('quantity',16,4);$t->timestamps();});
- Schema::create('order_payments',function(Blueprint $t){$t->id();$t->foreignId('order_id')->constrained()->cascadeOnDelete();$t->enum('method',['cash','transfer','courtesy']);$t->decimal('amount',12,2);$t->string('reference')->nullable();$t->foreignId('user_id')->constrained();$t->timestamps();});
- Schema::create('order_delivery_details',function(Blueprint $t){$t->id();$t->foreignId('order_id')->unique()->constrained()->cascadeOnDelete();$t->string('recipient');$t->string('phone',30);$t->text('address');$t->text('references')->nullable();$t->string('map_url')->nullable();$t->boolean('payment_received')->default(false);$t->timestamps();});
- Schema::create('order_status_histories',function(Blueprint $t){$t->id();$t->foreignId('order_id')->constrained()->cascadeOnDelete();$t->foreignId('user_id')->nullable()->constrained()->nullOnDelete();$t->string('from_status')->nullable();$t->string('to_status');$t->text('comment')->nullable();$t->timestamps();});
- Schema::create('stock_reservations',function(Blueprint $t){$t->id();$t->foreignId('order_id')->constrained()->cascadeOnDelete();$t->foreignId('ingredient_id')->constrained();$t->decimal('quantity',16,4);$t->dateTime('expires_at');$t->timestamps();$t->unique(['order_id','ingredient_id'],'stock_reservation_unique');});
- }public function down():void{foreach(['stock_reservations','order_status_histories','order_delivery_details','order_payments','order_item_ingredients','order_item_modifiers','order_item_flavors','order_items','orders'] as $x)Schema::dropIfExists($x);}};
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('orders', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('branch_id')->nullable()->constrained()->nullOnDelete();
+            $t->foreignId('user_id')->constrained();
+            $t->foreignId('customer_id')->nullable();
+            $t->date('order_date');
+            $t->unsignedInteger('daily_number');
+            $t->enum('status', ['draft', 'pending_payment', 'confirmed', 'kitchen_pending', 'preparing', 'prepared', 'ready', 'on_way', 'delivered', 'cancelled']);
+            $t->enum('type', ['pickup', 'whatsapp', 'delivery', 'dine_in']);
+            $t->dateTime('scheduled_at')->nullable();
+            $t->dateTime('pending_expires_at')->nullable();
+            $t->decimal('subtotal', 12, 2)->default(0);
+            $t->decimal('discount', 12, 2)->default(0);
+            $t->decimal('delivery_fee', 12, 2)->default(0);
+            $t->decimal('total', 12, 2)->default(0);
+            $t->boolean('courtesy')->default(false);
+            $t->boolean('inventory_deducted')->default(false);
+            $t->json('stock_warnings')->nullable();
+            $t->text('notes')->nullable();
+            $t->timestamps();
+            $t->index(['branch_id', 'order_date', 'daily_number']);
+        });
+        Schema::create('order_items', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_id')->constrained()->cascadeOnDelete();
+            $t->foreignId('product_variant_id')->nullable()->constrained()->nullOnDelete();
+            $t->foreignId('combo_id')->nullable()->constrained()->nullOnDelete();
+            $t->string('name');
+            $t->decimal('quantity', 10, 2);
+            $t->decimal('unit_price', 12, 2);
+            $t->decimal('total', 12, 2);
+            $t->text('notes')->nullable();
+            $t->timestamps();
+        });
+        Schema::create('order_item_flavors', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_item_id')->constrained()->cascadeOnDelete();
+            $t->foreignId('product_flavor_id')->constrained();
+            $t->decimal('ratio', 8, 4)->default(1);
+            $t->timestamps();
+        });
+        Schema::create('order_item_modifiers', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_item_id')->constrained()->cascadeOnDelete();
+            $t->foreignId('modifier_id')->constrained();
+            $t->string('name');
+            $t->decimal('price', 12, 2);
+            $t->timestamps();
+        });
+        Schema::create('order_item_ingredients', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_item_id')->constrained()->cascadeOnDelete();
+            $t->foreignId('ingredient_id')->constrained();
+            $t->decimal('quantity', 16, 4);
+            $t->timestamps();
+        });
+        Schema::create('order_payments', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_id')->constrained()->cascadeOnDelete();
+            $t->enum('method', ['cash', 'transfer', 'courtesy']);
+            $t->decimal('amount', 12, 2);
+            $t->string('reference')->nullable();
+            $t->foreignId('user_id')->constrained();
+            $t->timestamps();
+        });
+        Schema::create('order_delivery_details', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_id')->unique()->constrained()->cascadeOnDelete();
+            $t->string('recipient');
+            $t->string('phone', 30);
+            $t->text('address');
+            $t->text('references')->nullable();
+            $t->string('map_url')->nullable();
+            $t->boolean('payment_received')->default(false);
+            $t->timestamps();
+        });
+        Schema::create('order_status_histories', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_id')->constrained()->cascadeOnDelete();
+            $t->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $t->string('from_status')->nullable();
+            $t->string('to_status');
+            $t->text('comment')->nullable();
+            $t->timestamps();
+        });
+        Schema::create('stock_reservations', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('order_id')->constrained()->cascadeOnDelete();
+            $t->foreignId('ingredient_id')->constrained();
+            $t->decimal('quantity', 16, 4);
+            $t->dateTime('expires_at');
+            $t->timestamps();
+            $t->unique(['order_id', 'ingredient_id'], 'stock_reservation_unique');
+        });
+    }
+
+    public function down(): void
+    {
+        foreach (['stock_reservations', 'order_status_histories', 'order_delivery_details', 'order_payments', 'order_item_ingredients', 'order_item_modifiers', 'order_item_flavors', 'order_items', 'orders'] as $x) {
+            Schema::dropIfExists($x);
+        }
+    }
+};

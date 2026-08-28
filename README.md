@@ -1,58 +1,84 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Pizzería POS Inventario — API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+API de Laravel para el sistema de ventas, inventario por lotes, compras, producción, cocina, reparto, clientes, puntos, caja y reportes de la pizzería.
 
-## About Laravel
+## Requisitos
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- PHP 8.3 o posterior, con extensiones SQLite, GD y mbstring.
+- Composer.
+- SQLite para desarrollo local. También puede configurarse MySQL o PostgreSQL mediante `.env`.
+- El frontend Expo ubicado en la carpeta hermana `Pizzeria`.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
-
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Instalación local
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env
+php artisan key:generate
+touch database/database.sqlite
+php artisan migrate --seed
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+La configuración incluida usa:
 
-## Contributing
+- API: `http://127.0.0.1:8000`
+- WebSocket/Reverb: `ws://127.0.0.1:8080`
+- Base SQLite: `database/database.sqlite`
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Arranca cada proceso en una terminal distinta:
 
-## Code of Conduct
+```bash
+php artisan serve --host=0.0.0.0 --port=8000
+php artisan reverb:start --host=0.0.0.0 --port=8080
+php artisan schedule:work
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+El planificador ejecuta cada cinco minutos las expiraciones de pedidos pendientes y puntos, el despacho de pedidos programados y las alertas. También genera el respaldo diario de SQLite.
 
-## Security Vulnerabilities
+## Usuarios de desarrollo
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+En los entornos `local` y `testing`, el seeder crea estas cuentas:
 
-## License
+| Rol | Usuario | Correo | Contraseña |
+| --- | --- | --- | --- |
+| Administrador | `admin` | `admin@pizzeria.local` | `Pizzeria123!` |
+| Cajero | `cajero` | `cajero@pizzeria.local` | `Pizzeria123!` |
+| Cocina | `cocina` | `cocina@pizzeria.local` | `Pizzeria123!` |
+| Repartidor | `repartidor` | `repartidor@pizzeria.local` | `Pizzeria123!` |
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+El inicio de sesión acepta correo o nombre de usuario. En producción no se crean operadores de demostración y es obligatorio definir `PIZZERIA_SEED_PASSWORD` antes de ejecutar el seeder.
+
+## Módulos y reglas principales
+
+- Autenticación Sanctum, usuarios, roles y permisos efectivos.
+- Inventario por lotes con FEFO, caducidades, alertas, ajustes y trazabilidad de movimientos.
+- Compras por presentación con conversión automática a la unidad base y origen de pago.
+- Producción interna con receta, consumo de insumos y lote de producto resultante.
+- Productos, variantes, sabores, recetas, modificadores y paquetes configurables.
+- Pedidos borrador, pendientes, confirmados y programados; pagos mixtos, cortesías y cobro contra entrega.
+- Autorización explícita de faltantes, devolución antes de preparar y merma después de iniciar cocina.
+- Flujos separados de caja, cocina y reparto, publicados por Reverb y respaldados por sondeo del cliente.
+- Clientes con múltiples direcciones, historial, reglas simultáneas y movimientos de puntos.
+- Notas de cliente, cocina y reparto en HTML, PDF o PNG según corresponda.
+- Caja diaria, auditoría, reportes y operaciones automáticas programadas.
+
+Todas las consultas operativas están limitadas a la sucursal del usuario. Aunque el despliegue inicial use una sola sucursal, las entidades transaccionales conservan `branch_id`.
+
+## Verificación
+
+```bash
+./vendor/bin/pint --test
+php artisan test
+php artisan route:list --path=api
+php artisan schedule:list
+```
+
+Para validar una instalación limpia sin tocar la base de datos de trabajo, usa una base SQLite temporal o ejecuta la suite, que crea su propia base mediante `RefreshDatabase`.
+
+## Producción
+
+- Cambia las credenciales de Reverb y no publiques `PIZZERIA_SEED_PASSWORD`.
+- Define `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL`, CORS y los hosts reales de Reverb.
+- Ejecuta `php artisan config:cache` y `php artisan route:cache` después de establecer el entorno.
+- Mantén activos el servidor Reverb, el worker requerido por tu infraestructura y el cron de `php artisan schedule:run`.
+- Configura respaldos nativos si se cambia SQLite por otro motor.

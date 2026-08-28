@@ -1,3 +1,27 @@
 <?php
-namespace App\Console\Commands;use Illuminate\Console\Command;use Illuminate\Support\Facades\Storage;
-class BackupDatabase extends Command{protected$signature='pizzeria:backup';protected$description='Crea un respaldo de la base SQLite';public function handle():int{if(config('database.default')!=='sqlite'){$this->warn('Configure el respaldo nativo del motor usado.');return self::SUCCESS;}$source=config('database.connections.sqlite.database');if(!is_file($source))return self::FAILURE;Storage::put('backups/pizzeria-'.now()->format('Ymd-His').'.sqlite',file_get_contents($source));return self::SUCCESS;}}
+
+namespace App\Console\Commands;
+
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Storage;
+
+class BackupDatabase extends Command
+{
+    protected $signature = 'pizzeria:backup';
+
+    protected $description = 'Crea un respaldo de la base SQLite';
+
+    public function handle(): int
+    {
+        if (config('database.default') !== 'sqlite') {
+            $this->warn('Configure el respaldo nativo del motor usado.');
+
+            return self::SUCCESS;
+        }$source = config('database.connections.sqlite.database');
+        if (! is_file($source)) {
+            return self::FAILURE;
+        }Storage::put('backups/pizzeria-'.now()->format('Ymd-His').'.sqlite', file_get_contents($source));
+
+        return self::SUCCESS;
+    }
+}

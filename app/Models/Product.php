@@ -1,2 +1,30 @@
 <?php
-namespace App\Models;use Illuminate\Database\Eloquent\Model;class Product extends Model{protected $fillable=['branch_id','product_category_id','name','type','description','active'];public function category(){return $this->belongsTo(ProductCategory::class,'product_category_id');}public function variants(){return $this->hasMany(ProductVariant::class);}public function flavors(){return $this->hasMany(ProductFlavor::class);}}
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Product extends Model
+{
+    protected $fillable = ['branch_id', 'product_category_id', 'name', 'type', 'description', 'active'];
+
+    protected function casts(): array
+    {
+        return ['active' => 'boolean'];
+    }
+
+    public function category()
+    {
+        return $this->belongsTo(ProductCategory::class, 'product_category_id');
+    }
+
+    public function variants()
+    {
+        return $this->hasMany(ProductVariant::class);
+    }
+
+    public function flavors()
+    {
+        return $this->hasMany(ProductFlavor::class);
+    }
+}

@@ -1,2 +1,36 @@
 <?php
-namespace App\Models;use Illuminate\Database\Eloquent\Model;class ProductVariant extends Model{protected $fillable=['product_id','name','sku','price','max_flavors','allows_half_and_half','allows_stuffed_crust','active'];protected function casts():array{return ['price'=>'decimal:2','allows_half_and_half'=>'boolean','allows_stuffed_crust'=>'boolean','active'=>'boolean'];}public function product(){return $this->belongsTo(Product::class);}public function recipes(){return $this->hasMany(Recipe::class);}public function modifierRules(){return $this->hasMany(ProductModifierRule::class);}}
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class ProductVariant extends Model
+{
+    protected $fillable = ['product_id', 'name', 'sku', 'price', 'max_flavors', 'allows_half_and_half', 'allows_stuffed_crust', 'active'];
+
+    protected function casts(): array
+    {
+        return [
+            'price' => 'decimal:2',
+            'max_flavors' => 'integer',
+            'allows_half_and_half' => 'boolean',
+            'allows_stuffed_crust' => 'boolean',
+            'active' => 'boolean',
+        ];
+    }
+
+    public function product()
+    {
+        return $this->belongsTo(Product::class);
+    }
+
+    public function recipes()
+    {
+        return $this->hasMany(Recipe::class);
+    }
+
+    public function modifierRules()
+    {
+        return $this->hasMany(ProductModifierRule::class);
+    }
+}

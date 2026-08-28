@@ -3,59 +3,153 @@
 namespace App\Services;
 
 use App\Events\OrderStatusChanged;
+use App\Exceptions\StockShortageException;
+use App\Models\Branch;
+use App\Models\Combo;
+use App\Models\Ingredient;
 use App\Models\InventoryAdjustment;
 use App\Models\InventoryMovement;
-use App\Models\Combo;
-use App\Models\Modifier;
 use App\Models\Order;
+use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class OrderService
 {
+    public function __construct(
+        private readonly BranchSettings $settings,
+        private readonly InventoryService $inventory,
+        private readonly RecipeResolver $recipes,
+    ) {}
+
     public function create(array $data, $user): Order
     {
         return DB::transaction(function () use ($data, $user) {
-            $date = today()->toDateString();
-            $number = (int) Order::where('branch_id', $user->branch_id)->whereDate('order_date', $date)->where('status', '!=', 'cancelled')->max('daily_number') + 1;
-            $order = Order::create(['branch_id' => $user->branch_id, 'user_id' => $user->id, 'customer_id' => $data['customer_id'] ?? null, 'order_date' => $date, 'daily_number' => $number, 'status' => $data['status'], 'type' => $data['type'], 'scheduled_at' => $data['scheduled_at'] ?? null, 'pending_expires_at' => $data['status'] === 'pending_payment' ? now()->addMinutes(10) : null, 'discount' => $data['discount'] ?? 0, 'delivery_fee' => $data['delivery_fee'] ?? 0, 'courtesy' => $data['courtesy'] ?? false, 'notes' => $data['notes'] ?? null]);
-            $subtotal = 0;
+            // This row is the sequence lock for daily order numbers in the branch.
+            $branch = Branch::query()->whereKey($user->branch_id)->lockForUpdate()->firstOrFail();
+            if (! empty($data['idempotency_key'])) {
+                $existing = Order::query()
+                    ->where('branch_id', $branch->id)
+                    ->where('idempotency_key', $data['idempotency_key'])
+                    ->first();
+                if ($existing) {
+                    return $existing->load($this->relations());
+                }
+            }
+            $date = CarbonImmutable::now($branch->timezone ?: config('app.timezone'))->toDateString();
+            $number = (int) Order::query()
+                ->where('branch_id', $branch->id)
+                ->whereDate('order_date', $date)
+                ->where('status', '!=', 'cancelled')
+                ->max('daily_number') + 1;
+            $deliveryFee = $this->deliveryFee($branch->id, $data);
+
+            $order = Order::create([
+                'branch_id' => $branch->id,
+                'user_id' => $user->id,
+                'idempotency_key' => $data['idempotency_key'] ?? null,
+                'customer_id' => $data['customer_id'] ?? null,
+                'order_date' => $date,
+                'daily_number' => $number,
+                'status' => $data['status'],
+                'type' => $data['type'],
+                'scheduled_at' => $data['scheduled_at'] ?? null,
+                'pending_expires_at' => $data['status'] === 'pending_payment'
+                    ? now()->addMinutes(max(1, $this->settings->integer($branch->id, 'pending_payment_minutes')))
+                    : null,
+                'discount' => $data['discount'] ?? 0,
+                'delivery_fee' => $deliveryFee,
+                'courtesy' => $data['courtesy'] ?? false,
+                'collect_on_delivery' => $data['collect_on_delivery'] ?? false,
+                'notes' => $data['notes'] ?? null,
+            ]);
+
+            $subtotal = 0.0;
             foreach ($data['items'] as $row) {
                 if (isset($row['combo_id'])) {
                     $subtotal += $this->addCombo($order, $row);
+
                     continue;
                 }
+
                 $variant = ProductVariant::with('product')->findOrFail($row['product_variant_id']);
-                $modifierIds = $row['modifier_ids'] ?? [];
-                $unit = (float) $variant->price;
-                foreach ($variant->modifierRules()->with('modifier')->whereIn('modifier_id', $modifierIds)->get() as $rule) {
-                    $unit += (float) ($rule->price_override ?? $rule->modifier->price);
-                }$item = $order->items()->create(['product_variant_id' => $variant->id, 'name' => $variant->product->name.' '.$variant->name, 'quantity' => $row['quantity'], 'unit_price' => $unit, 'total' => $unit * $row['quantity'], 'notes' => $row['notes'] ?? null]);
-                $ingredients = app(RecipeResolver::class)->resolve($variant, $row['flavor_ids'] ?? [], $modifierIds);
-                foreach ($ingredients as $ing) {
-                    $item->ingredients()->create(['ingredient_id' => $ing['ingredient_id'], 'quantity' => $ing['quantity'] * $row['quantity']]);
-                }foreach ($row['flavor_ids'] ?? [] as $flavor) {
-                    $item->flavors()->create(['product_flavor_id' => $flavor, 'ratio' => 1 / max(1, count($row['flavor_ids']))]);
-                }foreach ($modifierIds as $id) {
-                    $m = Modifier::findOrFail($id);
-                    $item->modifiers()->create(['modifier_id' => $id, 'name' => $m->name, 'price' => $m->price]);
-                }$subtotal += $item->total;
-            }$total = max(0, $subtotal - (float) ($data['discount'] ?? 0) + (float) ($data['delivery_fee'] ?? 0));
+                abort_unless($variant->product->branch_id === $branch->id, 404);
+
+                $modifierIds = array_values(array_unique($row['modifier_ids'] ?? []));
+                $modifierRules = $variant->modifierRules()
+                    ->with('modifier')
+                    ->whereIn('modifier_id', $modifierIds)
+                    ->get();
+                if ($modifierRules->count() !== count($modifierIds)) {
+                    throw ValidationException::withMessages([
+                        'items' => 'Uno de los modificadores no está permitido para el producto.',
+                    ]);
+                }
+
+                $flavorIds = array_values(array_unique($row['flavor_ids'] ?? []));
+                $unitPrice = (float) $variant->price + $this->selectionExtra($variant, $flavorIds);
+                foreach ($modifierRules as $rule) {
+                    $unitPrice += (float) ($rule->price_override ?? $rule->modifier->price);
+                }
+                $item = $order->items()->create([
+                    'product_variant_id' => $variant->id,
+                    'name' => trim($variant->product->name.' '.$variant->name),
+                    'quantity' => $row['quantity'],
+                    'unit_price' => $unitPrice,
+                    'total' => $unitPrice * $row['quantity'],
+                    'notes' => $row['notes'] ?? null,
+                ]);
+
+                $ingredients = $this->recipes->resolve($variant, $flavorIds, $modifierIds);
+                foreach ($ingredients as $ingredient) {
+                    $item->ingredients()->create([
+                        'ingredient_id' => $ingredient['ingredient_id'],
+                        'quantity' => $ingredient['quantity'] * $row['quantity'],
+                    ]);
+                }
+                foreach ($flavorIds as $flavorId) {
+                    $item->flavors()->create([
+                        'product_flavor_id' => $flavorId,
+                        'ratio' => 1 / max(1, count($flavorIds)),
+                    ]);
+                }
+                foreach ($modifierRules as $rule) {
+                    $item->modifiers()->create([
+                        'modifier_id' => $rule->modifier_id,
+                        'name' => $rule->modifier->name,
+                        'price' => $rule->price_override ?? $rule->modifier->price,
+                    ]);
+                }
+                $subtotal += (float) $item->total;
+            }
+
+            $total = max(0, $subtotal - (float) ($data['discount'] ?? 0) + $deliveryFee);
             $order->update(['subtotal' => $subtotal, 'total' => $total]);
+
             if ($data['status'] === 'pending_payment') {
-                $requirements = $order->items()->with('ingredients')->get()->flatMap->ingredients->groupBy('ingredient_id');
-                foreach ($requirements as $ingredientId => $rows) {
-                    $order->reservations()->create(['ingredient_id' => $ingredientId, 'quantity' => $rows->sum('quantity'), 'expires_at' => $order->pending_expires_at]);
+                $requirements = $this->requirements($order);
+                $order->update(['stock_warnings' => $this->warnings($requirements, true)]);
+                foreach ($requirements as $requirement) {
+                    $order->reservations()->create([
+                        'ingredient_id' => $requirement['ingredient']->id,
+                        'quantity' => $requirement['quantity'],
+                        'expires_at' => $order->pending_expires_at,
+                    ]);
                 }
             }
-            if (($data['type'] === 'delivery') && isset($data['delivery'])) {
+            if ($data['type'] === 'delivery' && isset($data['delivery'])) {
                 $order->delivery()->create($data['delivery']);
-            }foreach ($data['payments'] ?? [] as $payment) {
+            }
+            foreach ($data['payments'] ?? [] as $payment) {
                 $order->payments()->create($payment + ['user_id' => $user->id]);
-            }if ($data['status'] === 'confirmed') {
+            }
+            if ($data['status'] === 'confirmed') {
                 $this->validatePayment($order);
-            }$order->histories()->create(['user_id' => $user->id, 'to_status' => $data['status']]);
+            }
+            $order->histories()->create(['user_id' => $user->id, 'to_status' => $data['status']]);
+            $this->broadcastAfterCommit($order);
 
             return $order->load($this->relations());
         });
@@ -64,74 +158,213 @@ class OrderService
     public function confirm(Order $order, array $payments, $user): Order
     {
         return DB::transaction(function () use ($order, $payments, $user) {
+            $order = $this->locked($order);
+            if ($order->status === 'confirmed') {
+                return $order->load($this->relations());
+            }
             $this->expect($order, ['draft', 'pending_payment']);
             $order->payments()->delete();
-            foreach ($payments as $p) {
-                $order->payments()->create($p + ['user_id' => $user->id]);
-            }$this->validatePayment($order);
+            foreach ($payments as $payment) {
+                $order->payments()->create($payment + ['user_id' => $user->id]);
+            }
+            $this->validatePayment($order);
             $this->transition($order, 'confirmed', $user);
             $order->reservations()->delete();
 
-            return $order->load($this->relations());
+            return $order->fresh()->load($this->relations());
         });
     }
 
-    public function sendToKitchen(Order $order, $user): Order
+    public function sendToKitchen(Order $order, $user, bool $allowShortage = false, bool $ignoreSchedule = false): Order
     {
-        return DB::transaction(function () use ($order, $user) {
+        abort_if(
+            $allowShortage && ! $user?->hasPermission('stock.override'),
+            403,
+            'Se requiere el permiso para autorizar faltantes de inventario.',
+        );
+
+        $blockedWarnings = [];
+        $result = DB::transaction(function () use ($order, $user, $allowShortage, $ignoreSchedule, &$blockedWarnings) {
+            $order = $this->locked($order);
+            if ($order->inventory_deducted && in_array($order->status, ['kitchen_pending', 'preparing', 'prepared', 'ready', 'on_way', 'delivered'], true)) {
+                return $order->load($this->relations());
+            }
             $this->expect($order, ['confirmed']);
-            $warnings = [];
-            foreach ($order->items as $item) {
-                foreach ($item->ingredients as $requirement) {
-                    $result = app(InventoryService::class)->consumeFefo($requirement->ingredient, (float) $requirement->quantity, 'sale', $user, $order);
-                    if ($result['shortage'] > 0) {
-                        $warnings[] = ['ingredient_id' => $requirement->ingredient_id, 'name' => $requirement->ingredient->name, 'required' => (float) $requirement->quantity, 'available' => (float) $requirement->ingredient->current_stock, 'shortage' => $result['shortage']];
-                    }
+
+            if ($order->scheduled_at && ! $ignoreSchedule) {
+                $leadMinutes = max(0, $this->settings->integer($order->branch_id, 'kitchen_lead_minutes'));
+                if (now()->lt($order->scheduled_at->copy()->subMinutes($leadMinutes))) {
+                    throw ValidationException::withMessages([
+                        'scheduled_at' => 'El pedido aún no entra en su ventana de preparación.',
+                    ]);
                 }
-            }$order->update(['inventory_deducted' => true, 'stock_warnings' => $warnings]);
+            }
+
+            $requirements = $this->requirements($order);
+            $warnings = $this->warnings($requirements, true);
+            if ($warnings && ! $allowShortage) {
+                $order->update(['stock_warnings' => $warnings]);
+                $blockedWarnings = $warnings;
+
+                return null;
+            }
+
+            foreach ($requirements as $requirement) {
+                $this->inventory->consumeFefo(
+                    $requirement['ingredient'],
+                    $requirement['quantity'],
+                    'sale',
+                    $user,
+                    $order,
+                    $allowShortage,
+                );
+            }
+
+            $order->update([
+                'inventory_deducted' => true,
+                'stock_warnings' => $warnings,
+                'stock_shortage_authorized_by' => $warnings ? $user?->id : null,
+                'stock_shortage_authorized_at' => $warnings ? now() : null,
+            ]);
             $this->transition($order, 'kitchen_pending', $user);
 
-            return $order->load($this->relations());
+            return $order->fresh()->load($this->relations());
         });
+
+        if ($blockedWarnings) {
+            throw new StockShortageException($blockedWarnings);
+        }
+
+        return $result;
+    }
+
+    public function dispatchScheduled(): int
+    {
+        $sent = 0;
+        Branch::query()->where('active', true)->each(function (Branch $branch) use (&$sent): void {
+            $leadMinutes = max(0, $this->settings->integer($branch->id, 'kitchen_lead_minutes'));
+            Order::query()
+                ->where('branch_id', $branch->id)
+                ->where('status', 'confirmed')
+                ->whereNotNull('scheduled_at')
+                ->where('scheduled_at', '<=', now()->addMinutes($leadMinutes))
+                ->orderBy('scheduled_at')
+                ->each(function (Order $order) use (&$sent): void {
+                    try {
+                        $this->sendToKitchen($order, $order->user, false, true);
+                        $sent++;
+                    } catch (StockShortageException) {
+                        // A cashier must explicitly authorize production with shortage.
+                    } catch (ValidationException) {
+                        // Another worker may already have transitioned this order.
+                    }
+                });
+        });
+
+        return $sent;
     }
 
     public function status(Order $order, string $status, $user): Order
     {
-        $role = $user->role?->slug;
-        $roleStates = ['administrador' => ['preparing', 'prepared', 'ready', 'on_way', 'delivered'], 'cocina' => ['preparing', 'prepared', 'ready'], 'repartidor' => ['on_way', 'delivered']];
-        if (! in_array($status, $roleStates[$role] ?? [])) {
-            throw ValidationException::withMessages(['status' => 'Tu rol no puede asignar este estado.']);
-        }
-        $allowed = ['kitchen_pending' => ['preparing'], 'preparing' => ['prepared'], 'prepared' => ['ready'], 'ready' => ['on_way', 'delivered'], 'on_way' => ['delivered']];
-        if (! in_array($status, $allowed[$order->status] ?? [])) {
-            throw ValidationException::withMessages(['status' => 'Cambio de estado no permitido.']);
-        }if ($order->type !== 'delivery' && $status === 'on_way') {
-            throw ValidationException::withMessages(['status' => 'Los pedidos para recoger no pasan a reparto.']);
-        }$this->transition($order, $status, $user);
-        if ($status === 'delivered') {
-            app(LoyaltyService::class)->award($order->fresh());
-        }
+        return DB::transaction(function () use ($order, $status, $user) {
+            $order = $this->locked($order);
+            if ($order->status === $status) {
+                return $order->load($this->relations());
+            }
+            $requiredPermission = match ($status) {
+                'preparing', 'prepared', 'ready' => 'kitchen.use',
+                'on_way' => 'delivery.use',
+                'delivered' => $order->type === 'delivery' ? 'delivery.use' : 'pos.use',
+            };
+            if (! $user->hasPermission($requiredPermission)) {
+                throw ValidationException::withMessages(['status' => 'Tu rol no puede asignar este estado.']);
+            }
 
-return $order->fresh()->load($this->relations());
+            $allowed = [
+                'kitchen_pending' => ['preparing'],
+                'preparing' => ['prepared'],
+                'prepared' => ['ready'],
+                'ready' => $order->type === 'delivery' ? ['on_way'] : ['delivered'],
+                'on_way' => ['delivered'],
+            ];
+            if (! in_array($status, $allowed[$order->status] ?? [], true)) {
+                throw ValidationException::withMessages(['status' => 'Cambio de estado no permitido.']);
+            }
+            if ($order->type !== 'delivery' && $status === 'on_way') {
+                throw ValidationException::withMessages(['status' => 'Los pedidos para recoger no pasan a reparto.']);
+            }
+            if ($status === 'delivered' && ! $order->courtesy
+                && (float) $order->payments()->sum('amount') + .009 < (float) $order->total) {
+                throw ValidationException::withMessages([
+                    'payments' => 'Debes registrar el pago completo antes de marcar el pedido como entregado.',
+                ]);
+            }
+
+            $this->transition($order, $status, $user);
+            if ($status === 'delivered') {
+                app(LoyaltyService::class)->award($order->fresh());
+            }
+
+            return $order->fresh()->load($this->relations());
+        });
     }
 
     public function cancel(Order $order, $user, ?string $comment = null): Order
     {
         return DB::transaction(function () use ($order, $user, $comment) {
-            if (in_array($order->status, ['delivered', 'cancelled'])) {
-                throw ValidationException::withMessages(['status' => 'El pedido ya no puede cancelarse desde operación.']);
-            }if ($order->inventory_deducted) {
-                $moves = InventoryMovement::where('reference_type', Order::class)->where('reference_id', $order->id)->where('type', 'sale')->where('quantity', '<', 0)->get();
-                if (! in_array($order->status, ['preparing', 'prepared', 'ready', 'on_way'])) {
-                    foreach ($moves as $move) {
-                        app(InventoryService::class)->move($move->batch, abs((float) $move->quantity), 'return', $user, $order, 'cancelled', $comment);
+            $order = $this->locked($order);
+            if ($order->status === 'cancelled') {
+                return $order->load($this->relations());
+            }
+            $advanced = in_array($order->status, ['preparing', 'prepared', 'ready', 'on_way', 'delivered'], true);
+            abort_if(
+                $advanced && ! $user->hasPermission('orders.cancel_advanced'),
+                403,
+                'Se requiere autorización administrativa para cancelar un pedido en preparación, reparto o ya entregado.',
+            );
+            if ($advanced && ! trim((string) $comment)) {
+                throw ValidationException::withMessages([
+                    'comment' => 'Debes indicar el motivo de la cancelación avanzada.',
+                ]);
+            }
+
+            if ($order->inventory_deducted) {
+                $movements = InventoryMovement::query()
+                    ->where('reference_type', Order::class)
+                    ->where('reference_id', $order->id)
+                    ->where('type', 'sale')
+                    ->where('quantity', '<', 0)
+                    ->get();
+                if (! in_array($order->status, ['preparing', 'prepared', 'ready', 'on_way', 'delivered'], true)) {
+                    foreach ($movements as $movement) {
+                        $this->inventory->move(
+                            $movement->batch,
+                            abs((float) $movement->quantity),
+                            'return',
+                            $user,
+                            $order,
+                            'cancelled',
+                            $comment,
+                        );
                     }
                 } else {
-                    foreach ($moves as $move) {
-                        InventoryAdjustment::create(['branch_id' => $order->branch_id, 'ingredient_id' => $move->ingredient_id, 'inventory_batch_id' => $move->inventory_batch_id, 'user_id' => $user->id, 'quantity' => abs((float) $move->quantity), 'reason' => 'preparation_error', 'comment' => 'Merma por cancelación: '.$comment]);
+                    foreach ($movements as $movement) {
+                        InventoryAdjustment::create([
+                            'branch_id' => $order->branch_id,
+                            'ingredient_id' => $movement->ingredient_id,
+                            'inventory_batch_id' => $movement->inventory_batch_id,
+                            'user_id' => $user->id,
+                            'quantity' => -abs((float) $movement->quantity),
+                            'reason' => 'preparation_error',
+                            'comment' => 'Merma por cancelación: '.($comment ?: 'sin comentario'),
+                        ]);
                     }
                 }
-            }$this->transition($order, 'cancelled', $user, $comment);
+            }
+
+            app(LoyaltyService::class)->reverseForCancellation($order, $user, trim((string) $comment) ?: 'Cancelación operativa');
+
+            $this->transition($order, 'cancelled', $user, $comment);
             $order->reservations()->delete();
 
             return $order->fresh()->load($this->relations());
@@ -140,22 +373,64 @@ return $order->fresh()->load($this->relations());
 
     public function expirePending(): int
     {
-        $orders = Order::where('status', 'pending_payment')->where('pending_expires_at', '<=', now())->get();
-        foreach ($orders as $order) {
-            $order->update(['status' => 'draft']);
-            $order->histories()->create(['from_status' => 'pending_payment', 'to_status' => 'draft', 'comment' => 'Tiempo de pago vencido']);
-            $order->reservations()->delete();
-        }
+        $expired = 0;
+        Order::query()
+            ->where('status', 'pending_payment')
+            ->where('pending_expires_at', '<=', now())
+            ->each(function (Order $order) use (&$expired): void {
+                DB::transaction(function () use ($order, &$expired): void {
+                    $order = $this->locked($order);
+                    if ($order->status !== 'pending_payment' || $order->pending_expires_at?->isFuture()) {
+                        return;
+                    }
+                    $this->transition($order, 'draft', null, 'Tiempo de pago vencido');
+                    $order->reservations()->delete();
+                    $expired++;
+                });
+            });
 
-return $orders->count();
+        return $expired;
     }
 
-    private function validatePayment(Order $o): void
+    private function validatePayment(Order $order): void
     {
-        if ($o->courtesy) {
+        if ($order->courtesy) {
+            if ($order->collect_on_delivery || $order->payments()->exists()) {
+                throw ValidationException::withMessages([
+                    'payments' => 'Una cortesía no debe registrar pagos ni cobro contra entrega.',
+                ]);
+            }
+
             return;
-        }if (abs((float) $o->payments()->sum('amount') - (float) $o->total) > .009) {
-            throw ValidationException::withMessages(['payments' => 'Los pagos deben cubrir exactamente el total.']);
+        }
+        if ($order->payments()->where('method', 'courtesy')->exists()) {
+            throw ValidationException::withMessages([
+                'payments' => 'El método cortesía requiere marcar toda la orden como cortesía.',
+            ]);
+        }
+        $inactiveMethods = $order->payments()
+            ->whereNotIn('method', $this->settings->activePaymentMethods($order->branch_id))
+            ->pluck('method')
+            ->unique();
+        if ($inactiveMethods->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'payments' => 'Uno de los métodos de pago está desactivado en los ajustes.',
+            ]);
+        }
+        $paid = (float) $order->payments()->sum('amount');
+        if ($order->collect_on_delivery) {
+            if ($order->type !== 'delivery' || $paid > (float) $order->total + .009) {
+                throw ValidationException::withMessages([
+                    'payments' => 'El cobro contra entrega solo aplica a domicilio y no puede exceder el total.',
+                ]);
+            }
+
+            return;
+        }
+        if (abs($paid - (float) $order->total) > .009) {
+            throw ValidationException::withMessages([
+                'payments' => 'Los pagos deben cubrir exactamente el total.',
+            ]);
         }
     }
 
@@ -163,39 +438,215 @@ return $orders->count();
     {
         $combo = Combo::with(['items.variant.product', 'items.options'])->findOrFail($row['combo_id']);
         abort_unless($combo->branch_id === $order->branch_id && $combo->active, 422);
-        $selections = collect($row['components'] ?? [])->keyBy('combo_item_id');
-        $item = $order->items()->create(['combo_id' => $combo->id, 'name' => $combo->name, 'quantity' => $row['quantity'], 'unit_price' => $combo->price, 'total' => (float) $combo->price * $row['quantity'], 'notes' => $row['notes'] ?? null]);
-        $totals = [];
-        foreach ($combo->items as $component) {
-            $selection = $selections->get($component->id, []);
-            $flavors = $selection['flavor_ids'] ?? [];
-            if ($component->flavor_required && empty($flavors)) throw ValidationException::withMessages(['items' => "Debes elegir sabor para {$component->variant->name}."]);
-            $allowedFlavors = $component->options->pluck('product_flavor_id')->filter();
-            if ($allowedFlavors->isNotEmpty() && collect($flavors)->diff($allowedFlavors)->isNotEmpty()) throw ValidationException::withMessages(['items' => 'El combo contiene un sabor no permitido.']);
-            $resolved = app(RecipeResolver::class)->resolve($component->variant, $flavors, $selection['modifier_ids'] ?? []);
-            foreach ($resolved as $ingredient) $totals[$ingredient['ingredient_id']] = ($totals[$ingredient['ingredient_id']] ?? 0) + $ingredient['quantity'] * $component->quantity * $row['quantity'];
+        $selectionRows = collect($row['components'] ?? []);
+        if ($selectionRows->pluck('combo_item_id')->unique()->count() !== $selectionRows->count()
+            || $selectionRows->pluck('combo_item_id')->diff($combo->items->pluck('id'))->isNotEmpty()) {
+            throw ValidationException::withMessages(['items' => 'El combo contiene un componente inválido o repetido.']);
         }
-        foreach ($totals as $ingredientId => $quantity) $item->ingredients()->create(['ingredient_id' => $ingredientId, 'quantity' => $quantity]);
+        $selections = $selectionRows->keyBy('combo_item_id');
+
+        $totals = [];
+        $components = [];
+        $unitExtras = 0.0;
+        foreach ($combo->items as $component) {
+            abort_unless($component->variant?->product?->branch_id === $order->branch_id, 422);
+            $selection = $selections->get($component->id, []);
+            $flavors = array_values(array_unique($selection['flavor_ids'] ?? []));
+            $modifierIds = array_values(array_unique($selection['modifier_ids'] ?? []));
+            if ($component->flavor_required && empty($flavors)) {
+                throw ValidationException::withMessages([
+                    'items' => "Debes elegir sabor para {$component->variant->name}.",
+                ]);
+            }
+            $allowedFlavors = $component->options->pluck('product_flavor_id')->filter();
+            if ($allowedFlavors->isNotEmpty() && collect($flavors)->diff($allowedFlavors)->isNotEmpty()) {
+                throw ValidationException::withMessages(['items' => 'El combo contiene un sabor no permitido.']);
+            }
+            $allowedModifiers = $component->options->pluck('modifier_id')->filter();
+            if ($allowedModifiers->isNotEmpty() && collect($modifierIds)->diff($allowedModifiers)->isNotEmpty()) {
+                throw ValidationException::withMessages(['items' => 'El combo contiene un modificador no permitido.']);
+            }
+
+            $resolved = $this->recipes->resolve(
+                $component->variant,
+                $flavors,
+                $modifierIds,
+            );
+            foreach ($resolved as $ingredient) {
+                $totals[$ingredient['ingredient_id']] = ($totals[$ingredient['ingredient_id']] ?? 0)
+                    + $ingredient['quantity'] * $component->quantity * $row['quantity'];
+            }
+
+            $modifierRules = $component->variant->modifierRules()
+                ->with('modifier')
+                ->whereIn('modifier_id', $modifierIds)
+                ->get();
+            $modifierExtra = $modifierRules->sum(
+                fn ($rule) => (float) ($rule->price_override ?? $rule->modifier->price),
+            );
+            $unitExtras += ($this->selectionExtra($component->variant, $flavors) + $modifierExtra)
+                * (float) $component->quantity;
+            $components[] = [
+                'combo_item_id' => $component->id,
+                'product_variant_id' => $component->variant->id,
+                'name' => trim($component->variant->product->name.' '.$component->variant->name),
+                'quantity' => (float) $component->quantity * (float) $row['quantity'],
+                'flavors' => ProductFlavor::query()->whereIn('id', $flavors)->pluck('name')->all(),
+                'modifiers' => $modifierRules->map(fn ($rule) => [
+                    'id' => $rule->modifier_id,
+                    'name' => $rule->modifier->name,
+                    'price' => (float) ($rule->price_override ?? $rule->modifier->price),
+                ])->values()->all(),
+                'notes' => $selection['notes'] ?? null,
+            ];
+        }
+
+        $unitPrice = (float) $combo->price + $unitExtras;
+        $item = $order->items()->create([
+            'combo_id' => $combo->id,
+            'name' => $combo->name,
+            'quantity' => $row['quantity'],
+            'unit_price' => $unitPrice,
+            'total' => $unitPrice * $row['quantity'],
+            'notes' => $row['notes'] ?? null,
+        ]);
+        foreach ($totals as $ingredientId => $quantity) {
+            $item->ingredients()->create(['ingredient_id' => $ingredientId, 'quantity' => $quantity]);
+        }
+        $item->components()->createMany($components);
+
         return (float) $item->total;
     }
 
-    private function transition(Order $o, string $to, $user, ?string $comment = null): void
+    /** @return array<int, array{ingredient: Ingredient, quantity: float}> */
+    private function requirements(Order $order): array
     {
-        $from = $o->status;
-        $o->update(['status' => $to]);
-        $o->histories()->create(['user_id' => $user?->id, 'from_status' => $from, 'to_status' => $to, 'comment' => $comment]);
-        OrderStatusChanged::dispatch($o->fresh());
+        $order->loadMissing('items.ingredients.ingredient');
+        $requirements = [];
+        foreach ($order->items as $item) {
+            foreach ($item->ingredients as $row) {
+                if (! isset($requirements[$row->ingredient_id])) {
+                    $requirements[$row->ingredient_id] = [
+                        'ingredient' => $row->ingredient,
+                        'quantity' => 0.0,
+                    ];
+                }
+                $requirements[$row->ingredient_id]['quantity'] += (float) $row->quantity;
+            }
+        }
+
+        return array_values($requirements);
     }
 
-    private function expect(Order $o, array $states): void
+    private function warnings(array $requirements, bool $lock = false): array
     {
-        if (! in_array($o->status,$states)) {
+        $warnings = [];
+        foreach ($requirements as $requirement) {
+            $available = $this->inventory->availableToPromise($requirement['ingredient'], $lock);
+            if ($available + .00001 < $requirement['quantity']) {
+                $warnings[] = [
+                    'ingredient_id' => $requirement['ingredient']->id,
+                    'name' => $requirement['ingredient']->name,
+                    'required' => $requirement['quantity'],
+                    'available' => $available,
+                    'shortage' => $requirement['quantity'] - $available,
+                ];
+            }
+        }
+
+        return $warnings;
+    }
+
+    private function selectionExtra(ProductVariant $variant, array $flavorIds): float
+    {
+        $count = count(array_unique($flavorIds));
+        if ($count < 2) {
+            return 0.0;
+        }
+
+        return match ($variant->product->type) {
+            'pizza' => (float) $this->settings->get($variant->product->branch_id, 'half_and_half_extra'),
+            'wings' => (float) $this->settings->get($variant->product->branch_id, 'additional_wing_flavor_extra') * ($count - 1),
+            default => 0.0,
+        };
+    }
+
+    private function deliveryFee(int $branchId, array $data): float
+    {
+        if (($data['type'] ?? null) !== 'delivery') {
+            return 0.0;
+        }
+
+        $configuredZones = collect($this->settings->get($branchId, 'delivery_zones'))
+            ->filter(fn ($zone) => is_array($zone));
+        if ($configuredZones->isEmpty()) {
+            return (float) ($data['delivery_fee'] ?? 0);
+        }
+        $zones = $configuredZones
+            ->filter(fn ($zone) => is_array($zone) && ($zone['active'] ?? true));
+        if ($zones->isEmpty()) {
+            throw ValidationException::withMessages([
+                'delivery.delivery_zone' => 'No hay zonas de entrega activas.',
+            ]);
+        }
+
+        $selected = trim((string) ($data['delivery']['delivery_zone'] ?? ''));
+        $zone = $zones->first(fn ($candidate) => mb_strtolower(trim((string) ($candidate['name'] ?? ''))) === mb_strtolower($selected));
+        if (! $zone) {
+            throw ValidationException::withMessages([
+                'delivery.delivery_zone' => 'Selecciona una zona de entrega activa.',
+            ]);
+        }
+
+        return round(max(0, (float) ($zone['fee'] ?? 0)), 2);
+    }
+
+    private function transition(Order $order, string $to, $user, ?string $comment = null): void
+    {
+        $from = $order->status;
+        $order->update(['status' => $to]);
+        $order->histories()->create([
+            'user_id' => $user?->id,
+            'from_status' => $from,
+            'to_status' => $to,
+            'comment' => $comment,
+        ]);
+        $this->broadcastAfterCommit($order);
+    }
+
+    private function broadcastAfterCommit(Order $order): void
+    {
+        $orderId = $order->id;
+        DB::afterCommit(function () use ($orderId): void {
+            $fresh = Order::find($orderId);
+            if ($fresh) {
+                OrderStatusChanged::dispatch($fresh);
+            }
+        });
+    }
+
+    private function locked(Order $order): Order
+    {
+        return Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+    }
+
+    private function expect(Order $order, array $states): void
+    {
+        if (! in_array($order->status, $states, true)) {
             throw ValidationException::withMessages(['status' => 'El estado actual no permite esta acción.']);
         }
     }
 
     private function relations(): array
     {
-        return ['items.flavors', 'items.modifiers', 'items.ingredients.ingredient', 'payments', 'delivery', 'histories'];
+        return [
+            'items.flavors',
+            'items.modifiers',
+            'items.ingredients.ingredient',
+            'items.components',
+            'payments',
+            'delivery',
+            'histories',
+        ];
     }
 }

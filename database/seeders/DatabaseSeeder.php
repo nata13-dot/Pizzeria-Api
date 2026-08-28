@@ -5,8 +5,6 @@ namespace Database\Seeders;
 use App\Models\Branch;
 use App\Models\BusinessProfile;
 use App\Models\Ingredient;
-use App\Models\Role;
-use App\Models\Unit;
 use App\Models\IngredientType;
 use App\Models\InventoryBatch;
 use App\Models\Permission;
@@ -14,6 +12,8 @@ use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ProductVariant;
 use App\Models\Recipe;
+use App\Models\Role;
+use App\Models\Unit;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -40,31 +40,53 @@ class DatabaseSeeder extends Seeder
         $permissionMap = [
             'pos.use' => ['cajero'], 'orders.view' => ['cajero', 'cocina', 'repartidor'],
             'kitchen.use' => ['cocina'], 'delivery.use' => ['repartidor'],
-            'inventory.view' => ['cajero'], 'purchases.manage' => ['cajero'],
-            'production.manage' => ['cajero'], 'customers.manage' => ['cajero'],
+            'inventory.view' => ['cajero'], 'purchases.manage' => [],
+            'production.manage' => [], 'customers.manage' => ['cajero'],
             'cash.manage' => ['cajero'], 'documents.generate' => ['cajero', 'cocina', 'repartidor'],
+            'stock.override' => [], 'orders.cancel_advanced' => [],
         ];
-        foreach ($permissionMap as $slug => $roleSlugs) {
-            $permission = Permission::firstOrCreate(['slug' => $slug], ['name' => $slug]);
-            foreach ($roleSlugs as $roleSlug) $roles[$roleSlug]->permissions()->syncWithoutDetaching($permission);
+        $permissions = collect($permissionMap)->mapWithKeys(
+            fn (array $roleSlugs, string $slug) => [
+                $slug => Permission::firstOrCreate(['slug' => $slug], ['name' => $slug]),
+            ],
+        );
+        foreach ($roles as $roleSlug => $role) {
+            $role->permissions()->sync(
+                $roleSlug === 'administrador'
+                    ? $permissions->pluck('id')
+                    : $permissions
+                        ->filter(fn (Permission $permission, string $slug) => in_array($roleSlug, $permissionMap[$slug], true))
+                        ->pluck('id'),
+            );
+        }
+
+        $seedPassword = env('PIZZERIA_SEED_PASSWORD');
+        if (! $seedPassword && app()->environment(['local', 'testing'])) {
+            $seedPassword = 'Pizzeria123!';
+        }
+        if (! $seedPassword) {
+            throw new \RuntimeException('Configura PIZZERIA_SEED_PASSWORD antes de crear el usuario administrador.');
         }
 
         User::updateOrCreate(['email' => 'admin@pizzeria.local'], [
             'name' => 'Administrador',
-            'password' => 'Pizzeria123!',
+            'username' => 'admin',
+            'password' => $seedPassword,
             'branch_id' => $branch->id,
             'role_id' => $roles['administrador']->id,
             'active' => true,
         ]);
 
-        foreach ([
-            ['name' => 'Cajero Demo', 'email' => 'cajero@pizzeria.local', 'role' => 'cajero'],
-            ['name' => 'Cocina Demo', 'email' => 'cocina@pizzeria.local', 'role' => 'cocina'],
-            ['name' => 'Repartidor Demo', 'email' => 'repartidor@pizzeria.local', 'role' => 'repartidor'],
-        ] as $user) {
+        $demoUsers = app()->environment(['local', 'testing']) ? [
+            ['name' => 'Cajero Demo', 'username' => 'cajero', 'email' => 'cajero@pizzeria.local', 'role' => 'cajero'],
+            ['name' => 'Cocina Demo', 'username' => 'cocina', 'email' => 'cocina@pizzeria.local', 'role' => 'cocina'],
+            ['name' => 'Repartidor Demo', 'username' => 'repartidor', 'email' => 'repartidor@pizzeria.local', 'role' => 'repartidor'],
+        ] : [];
+        foreach ($demoUsers as $user) {
             User::updateOrCreate(['email' => $user['email']], [
                 'name' => $user['name'],
-                'password' => 'Pizzeria123!',
+                'username' => $user['username'],
+                'password' => $seedPassword,
                 'branch_id' => $branch->id,
                 'role_id' => $roles[$user['role']]->id,
                 'active' => true,
@@ -72,19 +94,22 @@ class DatabaseSeeder extends Seeder
         }
 
         foreach ([
-            ['name'=>'Gramos','symbol'=>'g','dimension'=>'mass','base_factor'=>1],
-            ['name'=>'Kilogramos','symbol'=>'kg','dimension'=>'mass','base_factor'=>1000],
-            ['name'=>'Mililitros','symbol'=>'ml','dimension'=>'volume','base_factor'=>1],
-            ['name'=>'Litros','symbol'=>'l','dimension'=>'volume','base_factor'=>1000],
-            ['name'=>'Piezas','symbol'=>'pz','dimension'=>'count','base_factor'=>1],
-            ['name'=>'Paquetes','symbol'=>'paq','dimension'=>'count','base_factor'=>1],
-            ['name'=>'Cajas','symbol'=>'caja','dimension'=>'count','base_factor'=>1],
-            ['name'=>'Bolsas','symbol'=>'bolsa','dimension'=>'count','base_factor'=>1],
-            ['name'=>'Porciones','symbol'=>'porción','dimension'=>'count','base_factor'=>1],
-        ] as $unit) Unit::updateOrCreate(['symbol'=>$unit['symbol']],$unit);
+            ['name' => 'Gramos', 'symbol' => 'g', 'dimension' => 'mass', 'base_factor' => 1],
+            ['name' => 'Kilogramos', 'symbol' => 'kg', 'dimension' => 'mass', 'base_factor' => 1000],
+            ['name' => 'Mililitros', 'symbol' => 'ml', 'dimension' => 'volume', 'base_factor' => 1],
+            ['name' => 'Litros', 'symbol' => 'l', 'dimension' => 'volume', 'base_factor' => 1000],
+            ['name' => 'Piezas', 'symbol' => 'pz', 'dimension' => 'count', 'base_factor' => 1],
+            ['name' => 'Paquetes', 'symbol' => 'paq', 'dimension' => 'count', 'base_factor' => 1],
+            ['name' => 'Cajas', 'symbol' => 'caja', 'dimension' => 'count', 'base_factor' => 1],
+            ['name' => 'Bolsas', 'symbol' => 'bolsa', 'dimension' => 'count', 'base_factor' => 1],
+            ['name' => 'Porciones', 'symbol' => 'porción', 'dimension' => 'count', 'base_factor' => 1],
+        ] as $unit) {
+            Unit::updateOrCreate(['symbol' => $unit['symbol']], $unit);
+        }
 
-        foreach (['Lácteo','Embutido','Salsa','Harina','Masa','Vegetal','Carne','Desechable','Bebida','Otro'] as $type)
-            IngredientType::firstOrCreate(['name'=>$type],['expiry_alert_days'=>3,'active'=>true]);
+        foreach (['Lácteo', 'Embutido', 'Salsa', 'Harina', 'Masa', 'Vegetal', 'Carne', 'Desechable', 'Bebida', 'Otro'] as $type) {
+            IngredientType::firstOrCreate(['name' => $type], ['expiry_alert_days' => 3, 'active' => true]);
+        }
 
         if (app()->environment('testing')) {
             return;

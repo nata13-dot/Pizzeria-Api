@@ -14,30 +14,47 @@ class AuthController extends Controller
     public function login(Request $request): JsonResponse
     {
         $credentials = $request->validate([
-            'email' => ['required', 'email'],
+            'login' => ['nullable', 'required_without:email', 'string', 'max:255'],
+            'email' => ['nullable', 'required_without:login', 'email', 'max:255'],
             'password' => ['required', 'string'],
             'device_name' => ['nullable', 'string', 'max:100'],
         ]);
 
-        $user = User::with(['role', 'branch'])->where('email', $credentials['email'])->first();
-        if (! $user || ! $user->active || ! Hash::check($credentials['password'], $user->password)) {
-            throw ValidationException::withMessages(['email' => ['Las credenciales no son válidas.']]);
+        $identifier = mb_strtolower(trim($credentials['login'] ?? $credentials['email']));
+        $user = User::with(['role', 'branch'])
+            ->where('email', $identifier)
+            ->orWhere('username', $identifier)
+            ->first();
+        if (! $user || ! $user->active || ! $user->branch?->active || ! Hash::check($credentials['password'], $user->password)) {
+            throw ValidationException::withMessages(['login' => ['Las credenciales no son válidas.']]);
         }
 
         return response()->json([
             'token' => $user->createToken($credentials['device_name'] ?? 'pizzeria-app')->plainTextToken,
-            'user' => $user,
+            'user' => $this->withEffectivePermissions($user),
         ]);
     }
 
     public function me(Request $request): JsonResponse
     {
-        return response()->json($request->user()->load(['role', 'branch']));
+        return response()->json($this->withEffectivePermissions($request->user()->load(['role', 'branch'])));
     }
 
     public function logout(Request $request): JsonResponse
     {
         $request->user()->currentAccessToken()?->delete();
+
         return response()->json(['message' => 'Sesión cerrada.']);
+    }
+
+    private function withEffectivePermissions(User $user): User
+    {
+        $user->loadMissing(['role.permissions', 'branch']);
+        $permissions = $user->role?->slug === 'administrador'
+            ? ['*']
+            : $user->role?->permissions->pluck('slug')->values()->all();
+        $user->setAttribute('permissions', $permissions);
+
+        return $user;
     }
 }
