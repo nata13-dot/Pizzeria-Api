@@ -38,16 +38,25 @@ class CatalogManagementTest extends TestCase
             'product_category_id' => $category['id'],
             'name' => 'Pizza catálogo',
             'type' => 'pizza',
+            'description' => 'Pizza con queso y especialidades de la casa.',
+            'image_data_uri' => 'data:image/png;base64,'.base64_encode(base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')),
             'variants' => [
                 ['name' => 'Mediana', 'sku' => 'PIZ-CAT-M', 'price' => 150, 'max_flavors' => 2, 'allows_half_and_half' => true],
                 ['name' => 'Grande', 'sku' => 'PIZ-CAT-G', 'price' => 190, 'max_flavors' => 2, 'allows_half_and_half' => true],
             ],
             'flavors' => [['name' => 'Queso', 'ingredient_id' => $ingredient->id]],
-        ])->assertCreated()->assertJsonCount(2, 'variants')->json();
+        ])->assertCreated()
+            ->assertJsonCount(2, 'variants')
+            ->assertJsonPath('description', 'Pizza con queso y especialidades de la casa.')
+            ->assertJsonPath('image_data_uri', fn ($value) => is_string($value) && str_starts_with($value, 'data:image/png;base64,'))
+            ->json();
 
         $this->patchJson("/api/products/{$product['id']}", ['description' => 'Descripción corregida'])
             ->assertOk()
             ->assertJsonPath('description', 'Descripción corregida');
+        $this->patchJson("/api/products/{$product['id']}", ['image_data_uri' => null])
+            ->assertOk()
+            ->assertJsonPath('image_data_uri', null);
         $this->patchJson("/api/products/{$product['id']}", ['product_category_id' => null])
             ->assertOk()
             ->assertJsonPath('product_category_id', null);

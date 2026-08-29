@@ -146,6 +146,7 @@ class ProductController extends Controller
                 'name' => $data['name'],
                 'type' => $data['type'],
                 'description' => $data['description'] ?? null,
+                'image_data_uri' => $data['image_data_uri'] ?? null,
                 'active' => $data['active'] ?? true,
             ]);
             $product->variants()->createMany($data['variants']);
@@ -294,6 +295,26 @@ class ProductController extends Controller
             ],
             'type' => [$prefix, Rule::in(['pizza', 'wings', 'fries', 'nuggets', 'cone', 'beverage', 'extra', 'other'])],
             'description' => ['sometimes', 'nullable', 'string', 'max:5000'],
+            'image_data_uri' => [
+                'sometimes',
+                'nullable',
+                'string',
+                'max:1400000',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if ($value === null || $value === '') {
+                        return;
+                    }
+                    if (! preg_match('#^data:image/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$#D', $value, $matches)) {
+                        $fail('La imagen debe ser un archivo PNG o JPEG válido.');
+
+                        return;
+                    }
+                    $binary = base64_decode($matches[2], true);
+                    if ($binary === false || strlen($binary) > 1024 * 1024 || @getimagesizefromstring($binary) === false) {
+                        $fail('La imagen no es válida o supera el máximo de 1 MB.');
+                    }
+                },
+            ],
             'active' => ['sometimes', 'boolean'],
         ];
     }
