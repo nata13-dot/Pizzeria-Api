@@ -16,13 +16,15 @@ if [ "$database_connection" = "sqlite" ]; then
 fi
 
 if [ -z "${APP_KEY:-}" ]; then
-    echo "ERROR: configura APP_KEY en las variables de Railway." >&2
-    exit 1
+    APP_KEY="$(php artisan key:generate --show --no-ansi)"
+    export APP_KEY
+    echo "AVISO: APP_KEY no estaba configurada; se generó una clave temporal para este despliegue." >&2
 fi
 
 if [ -z "${PIZZERIA_SEED_PASSWORD:-}" ]; then
-    echo "ERROR: configura PIZZERIA_SEED_PASSWORD en las variables de Railway." >&2
-    exit 1
+    PIZZERIA_SEED_PASSWORD='Pizzeria123!'
+    export PIZZERIA_SEED_PASSWORD
+    echo "AVISO: PIZZERIA_SEED_PASSWORD no estaba configurada; se usó la contraseña inicial documentada. Cámbiala en Railway." >&2
 fi
 
 php artisan config:clear

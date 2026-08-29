@@ -98,4 +98,6 @@ PIZZERIA_SEED_PASSWORD=una-contraseña-segura
 CORS_ALLOWED_ORIGINS=https://localhost
 ```
 
+Si `APP_KEY` o `PIZZERIA_SEED_PASSWORD` todavía no existen, el script permite el primer arranque generando una clave temporal y usando `Pizzeria123!` como contraseña administrativa inicial. Configura valores permanentes inmediatamente después para conservar sesiones y proteger la cuenta.
+
 Para datos persistentes se recomienda agregar PostgreSQL y establecer `DB_CONNECTION=pgsql` y `DB_URL=${{Postgres.DATABASE_URL}}`. SQLite dentro del contenedor se reinicia con un despliegue salvo que `DB_DATABASE` apunte a un volumen persistente.
