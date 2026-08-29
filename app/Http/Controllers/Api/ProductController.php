@@ -299,7 +299,7 @@ class ProductController extends Controller
                 'sometimes',
                 'nullable',
                 'string',
-                'max:1400000',
+                'max:7000000',
                 function (string $attribute, mixed $value, \Closure $fail): void {
                     if ($value === null || $value === '') {
                         return;
@@ -310,8 +310,8 @@ class ProductController extends Controller
                         return;
                     }
                     $binary = base64_decode($matches[2], true);
-                    if ($binary === false || strlen($binary) > 1024 * 1024 || @getimagesizefromstring($binary) === false) {
-                        $fail('La imagen no es válida o supera el máximo de 1 MB.');
+                    if ($binary === false || strlen($binary) > 5 * 1024 * 1024 || @getimagesizefromstring($binary) === false) {
+                        $fail('La imagen no es válida o supera el máximo de 5 MB.');
                     }
                 },
             ],
