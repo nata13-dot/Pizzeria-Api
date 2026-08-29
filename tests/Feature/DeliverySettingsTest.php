@@ -17,6 +17,26 @@ class DeliverySettingsTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_admin_can_register_colonies_and_auxiliary_towns_with_optional_fees(): void
+    {
+        $this->seed();
+        $admin = User::where('email', 'admin@pizzeria.local')->firstOrFail();
+        Sanctum::actingAs($admin);
+
+        $this->putJson('/api/settings', ['settings' => ['delivery_zones' => [
+            ['name' => 'Centro', 'kind' => 'colony', 'fee' => 0, 'active' => true],
+            ['name' => 'San Miguel', 'kind' => 'auxiliary', 'fee' => 45, 'active' => true],
+        ]]])->assertOk()
+            ->assertJsonPath('delivery_zones.0.kind', 'colony')
+            ->assertJsonPath('delivery_zones.1.kind', 'auxiliary')
+            ->assertJsonPath('delivery_zones.1.fee', 45);
+
+        $this->getJson('/api/operational-settings')
+            ->assertOk()
+            ->assertJsonPath('delivery_zones.1.name', 'San Miguel')
+            ->assertJsonPath('delivery_zones.1.fee', 45);
+    }
+
     public function test_delivery_zone_fee_is_calculated_by_server_and_required_when_configured(): void
     {
         $this->seed();

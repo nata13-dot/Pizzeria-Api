@@ -123,6 +123,7 @@ class AdministrationController extends Controller
             'settings.max_wing_flavors' => 'sometimes|integer|min:1|max:20',
             'settings.delivery_zones' => 'sometimes|array|max:100',
             'settings.delivery_zones.*.name' => 'required|string|max:100|distinct',
+            'settings.delivery_zones.*.kind' => 'sometimes|in:colony,auxiliary',
             'settings.delivery_zones.*.fee' => 'required|numeric|min:0|max:100000',
             'settings.delivery_zones.*.active' => 'sometimes|boolean',
             'settings.payment_methods' => 'sometimes|array|max:2',
