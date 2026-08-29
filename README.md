@@ -82,3 +82,20 @@ Para validar una instalación limpia sin tocar la base de datos de trabajo, usa 
 - Ejecuta `php artisan config:cache` y `php artisan route:cache` después de establecer el entorno.
 - Mantén activos el servidor Reverb, el worker requerido por tu infraestructura y el cron de `php artisan schedule:run`.
 - Configura respaldos nativos si se cambia SQLite por otro motor.
+
+### Railway
+
+El archivo `railway.json` ejecuta `railway/start.sh` en cada despliegue. El script prepara SQLite cuando no se configuró otro motor, ejecuta migraciones y seeders, almacena las cachés de Laravel y levanta la API en el puerto asignado por Railway.
+
+Configura como mínimo estas variables en el servicio:
+
+```dotenv
+APP_ENV=production
+APP_DEBUG=false
+APP_KEY=base64:...
+APP_URL=https://tu-dominio.up.railway.app
+PIZZERIA_SEED_PASSWORD=una-contraseña-segura
+CORS_ALLOWED_ORIGINS=https://localhost
+```
+
+Para datos persistentes se recomienda agregar PostgreSQL y establecer `DB_CONNECTION=pgsql` y `DB_URL=${{Postgres.DATABASE_URL}}`. SQLite dentro del contenedor se reinicia con un despliegue salvo que `DB_DATABASE` apunte a un volumen persistente.
