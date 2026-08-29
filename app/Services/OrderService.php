@@ -55,6 +55,7 @@ class OrderService
                 'daily_number' => $number,
                 'status' => $data['status'],
                 'type' => $data['type'],
+                'sales_channel' => $data['sales_channel'] ?? 'local',
                 'scheduled_at' => $data['scheduled_at'] ?? null,
                 'pending_expires_at' => $data['status'] === 'pending_payment'
                     ? now()->addMinutes(max(1, $this->settings->integer($branch->id, 'pending_payment_minutes')))

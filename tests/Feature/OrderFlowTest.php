@@ -67,6 +67,7 @@ class OrderFlowTest extends TestCase
         return $this->postJson('/api/orders', [
             'status' => 'confirmed',
             'type' => 'delivery',
+            'sales_channel' => 'whatsapp',
             'collect_on_delivery' => $collectOnDelivery,
             'delivery' => [
                 'recipient' => 'Cliente entrega',
@@ -76,6 +77,29 @@ class OrderFlowTest extends TestCase
             'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]],
             'payments' => $collectOnDelivery ? [] : [['method' => 'cash', 'amount' => 200]],
         ])->assertCreated()->json();
+    }
+
+    public function test_delivery_records_its_sales_channel_and_requires_minimum_recipient_data(): void
+    {
+        $payload = [
+            'status' => 'confirmed',
+            'type' => 'delivery',
+            'sales_channel' => 'phone',
+            'delivery' => ['recipient' => 'Ana', 'phone' => '2221234567', 'address' => 'Junta auxiliar San Miguel'],
+            'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]],
+            'payments' => [['method' => 'cash', 'amount' => 200]],
+        ];
+
+        $this->postJson('/api/orders', $payload)
+            ->assertCreated()
+            ->assertJsonPath('type', 'delivery')
+            ->assertJsonPath('sales_channel', 'phone')
+            ->assertJsonPath('delivery.address', 'Junta auxiliar San Miguel');
+
+        unset($payload['delivery']['address']);
+        $this->postJson('/api/orders', $payload)
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('delivery.address');
     }
 
     public function test_inventory_is_only_deducted_when_sent_to_kitchen(): void
