@@ -172,9 +172,13 @@ class AdministrationController extends Controller
         if ($downloadUrl) {
             $whatsappText .= "\n".$downloadUrl;
         }
+        $printContent = $d['type'] === 'customer_html' && $doc->path
+            ? Storage::disk('local')->get($doc->path)
+            : $doc->content;
 
         return response()->json($doc->toArray() + [
             'download_url' => $downloadUrl,
+            'print_content' => $printContent,
             'whatsapp_url' => 'https://wa.me/?text='.rawurlencode($whatsappText),
         ], 201);
     }

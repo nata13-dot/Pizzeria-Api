@@ -88,7 +88,8 @@ class BusinessDocumentsTest extends TestCase
 
         $htmlResponse = $this->postJson("/api/orders/{$order->id}/generate-document", ['type' => 'customer_html'])
             ->assertCreated()
-            ->assertJsonPath('type', 'customer_html');
+            ->assertJsonPath('type', 'customer_html')
+            ->assertJson(fn ($json) => $json->whereType('print_content', 'string')->etc());
         $html = Storage::disk('local')->get($htmlResponse->json('path'));
         $this->assertStringContainsString('data:image/png;base64,', $html);
         $this->assertStringContainsString('Pizzería Documento', $html);
