@@ -3,15 +3,21 @@
 @section('content')
     @include('documents._business')
 
-    <h2>Nota de venta · Orden #{{ $orderNumber }}</h2>
-    <div class="muted">{{ $createdDate }} · {{ $createdTime }}</div>
+    <div class="ticket-heading">
+        <div><h2>Nota de venta</h2><div class="muted">Comprobante de pedido</div></div>
+        <div class="folio">Folio #{{ $orderNumber }}</div>
+    </div>
+    <div class="ticket-meta">Fecha: {{ $createdDate }} &nbsp;·&nbsp; Hora: {{ $createdTime }}</div>
 
-    <h3>Cliente</h3>
-    <div>{{ $customerName ?: 'Público general' }}</div>
-    @if ($customerPhone)<div>Teléfono: {{ $customerPhone }}</div>@endif
-    @if ($recipient && $recipient !== $customerName)<div>Recibe: {{ $recipient }}</div>@endif
-    @if ($deliveryAddress)<div>Dirección: {{ $deliveryAddress }}</div>@endif
+    <h3>Datos del cliente</h3>
+    <div class="customer-card">
+        <strong>{{ $customerName ?: 'Público general' }}</strong>
+        @if ($customerPhone)<div>Teléfono: {{ $customerPhone }}</div>@endif
+        @if ($recipient && $recipient !== $customerName)<div>Recibe: {{ $recipient }}</div>@endif
+        @if ($deliveryAddress)<div>Dirección: {{ $deliveryAddress }}</div>@endif
+    </div>
 
+    <h3>Detalle del pedido</h3>
     <table>
         <thead><tr><th>Productos y extras</th><th>Importe</th></tr></thead>
         <tbody>
@@ -46,10 +52,10 @@
         <div class="summary-row total"><span>Total</span><span>${{ number_format($total, 2) }}</span></div>
     </div>
 
-    <h3>Pago</h3>
-    @foreach ($payments as $payment)
-        <div>{{ $payment['label'] }}@if ($payment['reference']) · Ref. {{ $payment['reference'] }}@endif: ${{ number_format($payment['amount'], 2) }}</div>
-    @endforeach
+    <h3>Forma de pago</h3>
+    <div class="payment-list">@foreach ($payments as $payment)
+        <div><strong>{{ $payment['label'] }}</strong>@if ($payment['reference']) · Ref. {{ $payment['reference'] }}@endif <span style="float:right">${{ number_format($payment['amount'], 2) }}</span></div>
+    @endforeach</div>
     @if ($paymentNote)<div class="status">{{ $paymentNote }}</div>@endif
 
     @if ($receiptFooter)<p class="message">{{ $receiptFooter }}</p>@endif
