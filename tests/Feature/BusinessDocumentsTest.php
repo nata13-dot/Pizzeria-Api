@@ -95,10 +95,10 @@ class BusinessDocumentsTest extends TestCase
         $this->assertStringContainsString('Pizzería Documento', $html);
         $this->assertStringContainsString('Instagram: @pizza-documento', $html);
         $this->assertStringContainsString('Cliente &lt;script&gt;', $html);
-        $this->assertStringContainsString('Teléfono: 555-0199', $html);
+        $this->assertStringContainsString('Tel. 555-0199', $html);
         $this->assertStringContainsString('Calle &lt;principal&gt; 123', $html);
         $this->assertStringContainsString('Pizza &lt;Especial&gt;', $html);
-        $this->assertStringContainsString('Extra: Extra &amp; queso', $html);
+        $this->assertStringContainsString('• Extra &amp; queso', $html);
         $this->assertStringContainsString('Subtotal', $html);
         $this->assertStringContainsString('$200.00', $html);
         $this->assertStringContainsString('Descuento', $html);
