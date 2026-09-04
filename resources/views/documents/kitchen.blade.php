@@ -1,6 +1,8 @@
 @extends('documents.layout')
 
 @section('content')
+@php($receiptFontPixels = ['small' => 8, 'medium' => 10, 'large' => 12][$receiptFontSize ?? 'small'])
+<section class="print-document" data-print-font-size="{{ $receiptFontSize ?? 'small' }}" style="--receipt-font-size: {{ $receiptFontPixels }}px">
     @include('documents._business')
 
     <h1>Comanda de cocina</h1>
@@ -38,4 +40,5 @@
         </tbody>
     </table>
     @if ($showPrices)<div class="total">Total: ${{ number_format($total, 2) }}</div>@endif
+</section>
 @endsection

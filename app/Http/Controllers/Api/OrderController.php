@@ -136,7 +136,7 @@ class OrderController extends Controller
 
     public function kitchenOrders(Request $r, BranchSettings $settings)
     {
-        $orders = Order::with(['items.flavors.flavor', 'items.modifiers', 'items.components', 'histories'])
+        $orders = Order::with(['customer', 'delivery', 'items.flavors.flavor', 'items.modifiers', 'items.components', 'histories'])
             ->where('branch_id', $r->user()->branch_id)
             ->whereIn('status', ['kitchen_pending', 'preparing', 'prepared'])
             ->orderByRaw('scheduled_at IS NULL')

@@ -26,6 +26,8 @@ Route::get('/order-documents/{d}/download', [AdministrationController::class, 'd
 Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/preferences', [UserController::class, 'preferences']);
+    Route::put('/preferences', [UserController::class, 'updatePreferences']);
     Route::get('/operational-settings', OperationalSettingsController::class)->middleware('permission:pos.use');
     Route::get('/catalogs/{catalog}', [CatalogController::class, 'index'])->middleware('permission:inventory.view');
     Route::post('/catalogs/{catalog}', [CatalogController::class, 'store'])->middleware('permission:admin.only');

@@ -51,6 +51,23 @@ class AuthorizationTest extends TestCase
         $this->getJson('/api/production-recipes')->assertForbidden();
     }
 
+    public function test_every_user_can_manage_only_their_own_receipt_font_preference(): void
+    {
+        $this->seed();
+        $cashier = User::where('email', 'cajero@pizzeria.local')->firstOrFail();
+        $admin = User::where('email', 'admin@pizzeria.local')->firstOrFail();
+        Sanctum::actingAs($cashier);
+
+        $this->getJson('/api/preferences')->assertOk()->assertJsonPath('receipt_font_size', 'small');
+        $this->putJson('/api/preferences', ['receipt_font_size' => 'large'])
+            ->assertOk()->assertJsonPath('receipt_font_size', 'large');
+        $this->putJson('/api/preferences', ['receipt_font_size' => 'enorme'])
+            ->assertUnprocessable()->assertJsonValidationErrors('receipt_font_size');
+
+        $this->assertSame('large', $cashier->fresh()->receipt_font_size);
+        $this->assertSame('small', $admin->fresh()->receipt_font_size);
+    }
+
     public function test_kitchen_and_delivery_have_separate_operational_access(): void
     {
         $this->seed();

@@ -30,9 +30,9 @@ class ReceiptService
             ['name' => 'Pizzería POS'],
         )->fresh();
         $content = match ($type) {
-            'kitchen' => $this->kitchenHtml($order, $profile),
-            'delivery' => $this->deliveryHtml($order, $profile),
-            default => $this->customerHtml($order, $profile),
+            'kitchen' => $this->kitchenHtml($order, $profile, $user->receipt_font_size ?? 'small'),
+            'delivery' => $this->deliveryHtml($order, $profile, $user->receipt_font_size ?? 'small'),
+            default => $this->customerHtml($order, $profile, $user->receipt_font_size ?? 'small'),
         };
 
         $path = null;
@@ -42,7 +42,7 @@ class ReceiptService
             [$path, $contents] = match ($type) {
                 'customer_html' => [$base.'.html', $content],
                 'customer_pdf' => [$base.'.pdf', $this->pdf($content, $order)],
-                'customer_image' => [$base.'.png', $this->png($order, $profile)],
+                'customer_image' => [$base.'.png', $this->png($order, $profile, $user->receipt_font_size ?? 'small')],
             };
             if (! Storage::disk('local')->put($path, $contents)) {
                 throw new RuntimeException('No se pudo almacenar el documento de la orden.');
@@ -58,12 +58,12 @@ class ReceiptService
         ]);
     }
 
-    public function customerHtml(Order $order, BusinessProfile $profile): string
+    public function customerHtml(Order $order, BusinessProfile $profile, string $receiptFontSize = 'small'): string
     {
         $this->loadOrder($order);
         $payment = $this->paymentData($order);
 
-        return view('documents.customer', $this->commonData($order, $profile) + [
+        return view('documents.customer', $this->commonData($order, $profile, $receiptFontSize) + [
             'documentTitle' => 'Nota de venta #'.$order->daily_number,
             'createdDate' => $order->created_at->format('d/m/Y'),
             'createdTime' => $order->created_at->format('H:i'),
@@ -80,12 +80,12 @@ class ReceiptService
         ])->render();
     }
 
-    public function kitchenHtml(Order $order, BusinessProfile $profile): string
+    public function kitchenHtml(Order $order, BusinessProfile $profile, string $receiptFontSize = 'small'): string
     {
         $this->loadOrder($order);
         $showPrices = (bool) $this->settings->get($order->branch_id, 'show_kitchen_prices');
 
-        return view('documents.kitchen', $this->commonData($order, $profile) + [
+        return view('documents.kitchen', $this->commonData($order, $profile, $receiptFontSize) + [
             'documentTitle' => 'Comanda de cocina #'.$order->daily_number,
             'createdTime' => $order->created_at->format('H:i'),
             'orderType' => $this->orderType($order->type),
@@ -97,13 +97,13 @@ class ReceiptService
         ])->render();
     }
 
-    public function deliveryHtml(Order $order, BusinessProfile $profile): string
+    public function deliveryHtml(Order $order, BusinessProfile $profile, string $receiptFontSize = 'small'): string
     {
         $this->loadOrder($order);
         $payment = $this->paymentData($order);
         $delivery = $order->delivery;
 
-        return view('documents.delivery', $this->commonData($order, $profile) + [
+        return view('documents.delivery', $this->commonData($order, $profile, $receiptFontSize) + [
             'documentTitle' => 'Hoja de reparto #'.$order->daily_number,
             'customerName' => $order->customer?->name,
             'customerPhone' => $order->customer?->phone,
@@ -121,7 +121,7 @@ class ReceiptService
         ])->render();
     }
 
-    private function commonData(Order $order, BusinessProfile $profile): array
+    private function commonData(Order $order, BusinessProfile $profile, string $receiptFontSize = 'small'): array
     {
         $showBusinessDetails = $profile->show_business_details !== false;
 
@@ -138,6 +138,7 @@ class ReceiptService
             'receiptFooter' => $profile->receipt_footer,
             'orderNumber' => $order->daily_number,
             'items' => $order->items->map(fn ($item) => $this->itemData($item))->all(),
+            'receiptFontSize' => in_array($receiptFontSize, ['small', 'medium', 'large'], true) ? $receiptFontSize : 'small',
         ];
     }
 
@@ -249,13 +250,13 @@ class ReceiptService
         return $contents;
     }
 
-    private function png(Order $order, BusinessProfile $profile): string
+    private function png(Order $order, BusinessProfile $profile, string $receiptFontSize = 'small'): string
     {
         if (! function_exists('imagecreatetruecolor')) {
             throw new RuntimeException('La extensión GD es necesaria para generar la nota como imagen.');
         }
 
-        $common = $this->commonData($order, $profile);
+        $common = $this->commonData($order, $profile, $receiptFontSize);
         $payment = $this->paymentData($order);
         $lines = [];
         if ($common['showBusinessDetails']) {
@@ -334,7 +335,7 @@ class ReceiptService
         $logo = $common['showBusinessDetails'] ? $this->logoImage($common['logoDataUrl']) : null;
         $logoHeight = $logo ? 105 : 0;
         $width = 720;
-        $lineHeight = 26;
+        $lineHeight = match ($common['receiptFontSize']) { 'large' => 30, 'medium' => 26, default => 22 };
         $height = max(480, 45 + $logoHeight + $wrapped->count() * $lineHeight);
         $image = imagecreatetruecolor($width, $height);
         if ($image === false) {
@@ -358,7 +359,8 @@ class ReceiptService
             $y += $logoHeight;
         }
         foreach ($wrapped as $index => $line) {
-            $font = $index === 0 || str_starts_with($line, 'ORDEN #') || str_starts_with($line, 'TOTAL:') ? 5 : 4;
+            $normalFont = match ($common['receiptFontSize']) { 'large' => 5, 'medium' => 4, default => 3 };
+            $font = $index === 0 || str_starts_with($line, 'ORDEN #') || str_starts_with($line, 'TOTAL:') ? min(5, $normalFont + 1) : $normalFont;
             $color = str_starts_with($line, 'TOTAL:') ? $brand : $dark;
             imagestring($image, $font, 28, $y + $index * $lineHeight, $line, $color);
         }

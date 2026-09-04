@@ -1,6 +1,8 @@
 @extends('documents.layout')
 
 @section('content')
+@php($receiptFontPixels = ['small' => 8, 'medium' => 10, 'large' => 12][$receiptFontSize ?? 'small'])
+<section class="print-document" data-print-font-size="{{ $receiptFontSize ?? 'small' }}" style="--receipt-font-size: {{ $receiptFontPixels }}px">
     @include('documents._business')
 
     <h1>Hoja de reparto</h1>
@@ -29,4 +31,5 @@
     <div><strong>Estado de pago:</strong> {{ $paymentStatus }}</div>
     <div class="total">Saldo por cobrar: ${{ number_format($balanceDue, 2) }}</div>
     @if ($orderNotes)<div class="status"><strong>Notas de reparto:</strong> {{ $orderNotes }}</div>@endif
+</section>
 @endsection

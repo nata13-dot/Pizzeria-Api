@@ -129,6 +129,21 @@ class UserController extends Controller
         return $r->user()->notifications()->latest()->paginate(30);
     }
 
+    public function preferences(Request $request): array
+    {
+        return ['receipt_font_size' => $request->user()->receipt_font_size ?? 'small'];
+    }
+
+    public function updatePreferences(Request $request): array
+    {
+        $data = $request->validate([
+            'receipt_font_size' => ['required', Rule::in(['small', 'medium', 'large'])],
+        ]);
+        $request->user()->update($data);
+
+        return ['receipt_font_size' => $request->user()->fresh()->receipt_font_size];
+    }
+
     public function read(Request $r, string $id)
     {
         $n = $r->user()->notifications()->findOrFail($id);

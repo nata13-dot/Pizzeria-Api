@@ -80,6 +80,7 @@ class BusinessDocumentsTest extends TestCase
         Storage::fake('local');
         $this->seed();
         $admin = User::where('email', 'admin@pizzeria.local')->firstOrFail();
+        $admin->update(['receipt_font_size' => 'large']);
         Sanctum::actingAs($admin);
         $this->putJson('/api/business-profile', $this->profilePayload() + [
             'logo_base64' => 'data:image/png;base64,'.$this->imageBase64('png'),
@@ -93,6 +94,8 @@ class BusinessDocumentsTest extends TestCase
         $html = Storage::disk('local')->get($htmlResponse->json('path'));
         $this->assertStringContainsString('data:image/png;base64,', $html);
         $this->assertStringContainsString('Pizzería Documento', $html);
+        $this->assertStringContainsString('data-print-font-size="large"', $html);
+        $this->assertStringContainsString('--receipt-font-size: 12px', $html);
         $this->assertStringNotContainsString('Instagram: @pizza-documento', $html);
         $this->assertStringContainsString('Cliente &lt;script&gt;', $html);
         $this->assertStringContainsString('Tel. 555-0199', $html);
@@ -134,6 +137,7 @@ class BusinessDocumentsTest extends TestCase
         $this->seed();
         $admin = User::where('email', 'admin@pizzeria.local')->firstOrFail();
         $kitchen = User::where('email', 'cocina@pizzeria.local')->firstOrFail();
+        $kitchen->update(['receipt_font_size' => 'medium']);
         $order = $this->richDeliveryOrder($admin);
         Sanctum::actingAs($kitchen);
 
@@ -141,6 +145,7 @@ class BusinessDocumentsTest extends TestCase
             ->assertCreated()
             ->json('content');
         $this->assertStringContainsString('Comanda de cocina', $hidden);
+        $this->assertStringContainsString('data-print-font-size="medium"', $hidden);
         $this->assertStringContainsString('Domicilio', $hidden);
         $this->assertStringContainsString('Prioridad:', $hidden);
         $this->assertStringContainsString('Programada', $hidden);
