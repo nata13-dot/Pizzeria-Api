@@ -2,7 +2,7 @@
 
 @section('content')
 <section class="customer-ticket">
-    @include('documents._business')
+    @include('documents._business', ['compactBusiness' => true])
 
     <div class="ticket-heading ticket-title">
         <h2>NOTA DE VENTA</h2>

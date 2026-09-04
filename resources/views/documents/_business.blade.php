@@ -10,10 +10,10 @@
         @if ($businessAddress)
             <div class="business-detail">{{ $businessAddress }}</div>
         @endif
-        @if ($taxId)
+        @if ($taxId && empty($compactBusiness))
             <div class="business-detail">RFC / identificación fiscal: {{ $taxId }}</div>
         @endif
-        @if ($socialLinks)
+        @if ($socialLinks && empty($compactBusiness))
             <div class="business-detail">
                 @foreach ($socialLinks as $social)
                     <span>{{ $social['name'] }}: {{ $social['value'] }}@if (! $loop->last) · @endif</span>

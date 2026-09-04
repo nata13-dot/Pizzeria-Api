@@ -236,7 +236,9 @@ class ReceiptService
         $detailCount = $order->items->sum(
             fn ($item) => 1 + $item->flavors->count() + $item->modifiers->count() + $item->components->count(),
         );
-        $height = min(3000, max(700, 620 + $detailCount * 42));
+        // Thermal receipts use a custom-height page. Keep the estimate close to
+        // the compact layout so the printer does not feed a large blank tail.
+        $height = min(1800, max(340, 320 + $detailCount * 28));
         $pdf->setPaper([0, 0, 226.77, $height]);
         $pdf->render();
         $contents = $pdf->output();
