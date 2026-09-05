@@ -24,8 +24,8 @@ class PushService
             if ($expoTokens->isNotEmpty()) {
                 Http::timeout(8)->post('https://exp.host/--/api/v2/push/send', $expoTokens->map(
                     fn (string $to): array => compact('to', 'title', 'body', 'data') + [
-                        'sound' => 'campanilla.wav',
-                        'channelId' => 'orders_kitchen_bell',
+                        'sound' => 'notification_arrival.wav',
+                        'channelId' => 'orders_arrival_tone_v2',
                         'priority' => 'high',
                     ],
                 )->values()->all())->throw();
@@ -59,13 +59,13 @@ class PushService
                     'android' => [
                         'priority' => 'high',
                         'notification' => [
-                            'channel_id' => 'orders_kitchen_bell',
-                            'sound' => 'campanilla',
+                            'channel_id' => 'orders_arrival_tone_v2',
+                            'sound' => 'notification_arrival',
                             'default_vibrate_timings' => true,
                             'notification_priority' => 'PRIORITY_HIGH',
                         ],
                     ],
-                    'apns' => ['payload' => ['aps' => ['sound' => 'campanilla.wav']]],
+                    'apns' => ['payload' => ['aps' => ['sound' => 'notification_arrival.wav']]],
                 ],
             ])->throw();
     }
