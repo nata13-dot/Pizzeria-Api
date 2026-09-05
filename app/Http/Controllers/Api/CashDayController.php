@@ -112,7 +112,7 @@ class CashDayController extends Controller
             'type' => ['required', 'in:income,expense'],
             'amount' => ['required', 'numeric', 'gt:0', 'max:9999999999.99'],
             'category' => ['required', 'string', 'max:100'],
-            'description' => ['nullable', 'string', 'max:2000'],
+            'description' => ['nullable', 'required_if:type,expense', 'string', 'max:2000'],
         ]);
         $data['user_id'] = $request->user()->id;
 

@@ -15,16 +15,12 @@ if [ "$database_connection" = "sqlite" ]; then
     export DB_DATABASE="$database_file"
 fi
 
-if [ -z "${APP_KEY:-}" ]; then
-    APP_KEY="$(php artisan key:generate --show --no-ansi)"
-    export APP_KEY
-    echo "AVISO: APP_KEY no estaba configurada; se generó una clave temporal para este despliegue." >&2
-fi
+: "${APP_KEY:?Configura una APP_KEY persistente antes de desplegar.}"
+: "${PIZZERIA_SEED_PASSWORD:?Configura PIZZERIA_SEED_PASSWORD antes de desplegar.}"
 
-if [ -z "${PIZZERIA_SEED_PASSWORD:-}" ]; then
-    PIZZERIA_SEED_PASSWORD='Pizzeria123!'
-    export PIZZERIA_SEED_PASSWORD
-    echo "AVISO: PIZZERIA_SEED_PASSWORD no estaba configurada; se usó la contraseña inicial documentada. Cámbiala en Railway." >&2
+if [ "${APP_ENV:-production}" = "production" ] && [ "${APP_DEBUG:-false}" != "false" ]; then
+    echo "APP_DEBUG debe ser false en producción." >&2
+    exit 1
 fi
 
 php artisan config:clear

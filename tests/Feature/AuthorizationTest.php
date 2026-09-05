@@ -58,13 +58,18 @@ class AuthorizationTest extends TestCase
         $admin = User::where('email', 'admin@pizzeria.local')->firstOrFail();
         Sanctum::actingAs($cashier);
 
-        $this->getJson('/api/preferences')->assertOk()->assertJsonPath('receipt_font_size', 'small');
+        $this->getJson('/api/preferences')->assertOk()
+            ->assertJsonPath('system_font_size', 'medium')
+            ->assertJsonPath('receipt_font_size', 'small');
+        $this->putJson('/api/preferences', ['system_font_size' => 'medium'])
+            ->assertOk()->assertJsonPath('system_font_size', 'medium');
         $this->putJson('/api/preferences', ['receipt_font_size' => 'large'])
             ->assertOk()->assertJsonPath('receipt_font_size', 'large');
         $this->putJson('/api/preferences', ['receipt_font_size' => 'enorme'])
             ->assertUnprocessable()->assertJsonValidationErrors('receipt_font_size');
 
         $this->assertSame('large', $cashier->fresh()->receipt_font_size);
+        $this->assertSame('medium', $cashier->fresh()->system_font_size);
         $this->assertSame('small', $admin->fresh()->receipt_font_size);
     }
 

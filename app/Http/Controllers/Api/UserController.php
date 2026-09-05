@@ -81,6 +81,16 @@ class UserController extends Controller
 
     public function updateRole(Request $request, Role $role)
     {
+        $systemAdminEmail = mb_strtolower(trim((string) config('services.system_admin_email')));
+        abort_if(
+            ! (
+                ($systemAdminEmail !== '' && mb_strtolower((string) $request->user()->email) === $systemAdminEmail)
+                || (Branch::query()->count() === 1 && $request->user()->role?->slug === 'administrador')
+            ),
+            403,
+            'Solo el administrador del sistema puede editar los roles globales.',
+        );
+
         $data = $request->validate([
             'name' => 'sometimes|required|string|max:100',
             'description' => 'sometimes|nullable|string|max:500',
@@ -131,17 +141,29 @@ class UserController extends Controller
 
     public function preferences(Request $request): array
     {
-        return ['receipt_font_size' => $request->user()->receipt_font_size ?? 'small'];
+        return [
+            'system_font_size' => $request->user()->system_font_size ?? 'medium',
+            'receipt_font_size' => $request->user()->receipt_font_size ?? 'small',
+        ];
     }
 
     public function updatePreferences(Request $request): array
     {
         $data = $request->validate([
-            'receipt_font_size' => ['required', Rule::in(['small', 'medium', 'large'])],
+            'system_font_size' => ['sometimes', 'required', Rule::in(['small', 'medium', 'large'])],
+            'receipt_font_size' => ['sometimes', 'required', Rule::in(['small', 'medium', 'large'])],
         ]);
+        if ($data === []) {
+            abort(422, 'Debes indicar al menos una preferencia de fuente.');
+        }
         $request->user()->update($data);
 
-        return ['receipt_font_size' => $request->user()->fresh()->receipt_font_size];
+        $user = $request->user()->fresh();
+
+        return [
+            'system_font_size' => $user->system_font_size ?? 'medium',
+            'receipt_font_size' => $user->receipt_font_size ?? 'small',
+        ];
     }
 
     public function read(Request $r, string $id)

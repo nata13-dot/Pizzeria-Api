@@ -30,7 +30,12 @@ class AuthController extends Controller
         }
 
         return response()->json([
-            'token' => $user->createToken($credentials['device_name'] ?? 'pizzeria-app')->plainTextToken,
+            'token' => $user->createToken(
+                $credentials['device_name'] ?? 'pizzeria-app',
+                ['*'],
+                now()->addHours(9),
+            )->plainTextToken,
+            'expires_at' => now()->addHours(9)->toIso8601String(),
             'user' => $this->withEffectivePermissions($user),
         ]);
     }

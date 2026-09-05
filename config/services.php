@@ -2,6 +2,9 @@
 
 return [
 
+    'system_admin_email' => env('SYSTEM_ADMIN_EMAIL'),
+    'firebase_service_account_json' => env('FIREBASE_SERVICE_ACCOUNT_JSON'),
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services
