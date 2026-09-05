@@ -10,6 +10,7 @@ use App\Models\ProductionRecipe;
 use App\Models\Supplier;
 use App\Models\Unit;
 use App\Models\User;
+use App\Services\BranchClock;
 use App\Services\InventoryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -49,7 +50,8 @@ class InventoryFlowTest extends TestCase
         $kg = Unit::where('symbol', 'kg')->firstOrFail();
         $ingredient = $this->postJson('/api/ingredients', ['name' => 'Queso mozzarella', 'base_unit_id' => $grams->id, 'minimum_stock' => 2000, 'critical_stock' => 500])->assertCreated()->json();
         $presentation = $this->postJson("/api/ingredients/{$ingredient['id']}/presentations", ['name' => 'Bolsa 2 kg', 'quantity' => 2, 'equivalent_unit_id' => $kg->id])->assertCreated()->assertJsonPath('base_quantity', '2000.0000')->json();
-        $this->postJson('/api/purchases', ['purchased_at' => today()->toDateString(), 'payment_source' => 'owner', 'items' => [['ingredient_presentation_id' => $presentation['id'], 'presentations_quantity' => 2, 'total_cost' => 400, 'expires_at' => today()->addDays(5)->toDateString(), 'lot_code' => 'Q-01']]])->assertCreated()->assertJsonPath('total', '400.00');
+        $date = app(BranchClock::class)->today($user->branch_id);
+        $this->postJson('/api/purchases', ['purchased_at' => $date->toDateString(), 'payment_source' => 'owner', 'items' => [['ingredient_presentation_id' => $presentation['id'], 'presentations_quantity' => 2, 'total_cost' => 400, 'expires_at' => $date->addDays(5)->toDateString(), 'lot_code' => 'Q-01']]])->assertCreated()->assertJsonPath('total', '400.00');
         $this->assertDatabaseHas('inventory_batches', ['ingredient_id' => $ingredient['id'], 'available_quantity' => 4000]);
         $this->assertDatabaseHas('inventory_movements', ['ingredient_id' => $ingredient['id'], 'type' => 'purchase', 'quantity' => 4000]);
     }
@@ -279,8 +281,9 @@ class InventoryFlowTest extends TestCase
         $milliliters = Unit::where('symbol', 'ml')->firstOrFail();
         $localIngredient = Ingredient::create(['branch_id' => $user->branch_id, 'base_unit_id' => $grams->id, 'name' => 'Ingrediente local válido']);
         $localPresentation = IngredientPresentation::create(['ingredient_id' => $localIngredient->id, 'name' => 'Bolsa local', 'quantity' => 100, 'equivalent_unit_id' => $grams->id, 'base_quantity' => 100]);
+        $date = app(BranchClock::class)->today($user->branch_id)->toDateString();
         $payload = fn (int $presentationId): array => [
-            'purchased_at' => today()->toDateString(),
+            'purchased_at' => $date,
             'payment_source' => 'owner',
             'items' => [['ingredient_presentation_id' => $presentationId, 'presentations_quantity' => 1, 'total_cost' => 50]],
         ];

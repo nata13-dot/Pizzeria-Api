@@ -86,7 +86,7 @@ class DeliverySettingsTest extends TestCase
 
         $this->postJson('/api/orders', [
             'status' => 'confirmed',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'delivery_fee' => 500,
             'items' => [['product_variant_id' => $variant->id, 'quantity' => 1]],
             'payments' => [['method' => 'cash', 'amount' => 200]],

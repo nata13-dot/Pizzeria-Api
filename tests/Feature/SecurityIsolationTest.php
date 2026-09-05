@@ -255,7 +255,7 @@ class SecurityIsolationTest extends TestCase
             'order_date' => today(),
             'daily_number' => $dailyNumber,
             'status' => 'draft',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
         ]);
     }
 }

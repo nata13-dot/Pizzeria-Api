@@ -8,7 +8,7 @@ class Order extends Model
 {
     protected $fillable = [
         'branch_id', 'user_id', 'idempotency_key', 'customer_id', 'order_date', 'daily_number', 'status', 'type', 'sales_channel',
-        'scheduled_at', 'pending_expires_at', 'subtotal', 'discount', 'delivery_fee', 'total',
+        'scheduled_at', 'pending_expires_at', 'contact_name', 'contact_phone', 'subtotal', 'discount', 'delivery_fee', 'total',
         'courtesy', 'collect_on_delivery', 'inventory_deducted', 'stock_warnings', 'stock_shortage_authorized_by',
         'stock_shortage_authorized_at', 'notes',
     ];

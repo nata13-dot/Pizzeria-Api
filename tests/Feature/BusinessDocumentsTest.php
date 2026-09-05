@@ -95,7 +95,7 @@ class BusinessDocumentsTest extends TestCase
         $this->assertStringContainsString('data:image/png;base64,', $html);
         $this->assertStringContainsString('Pizzería Documento', $html);
         $this->assertStringContainsString('data-print-font-size="large"', $html);
-        $this->assertStringContainsString('--receipt-font-size: 12px', $html);
+        $this->assertStringContainsString('--receipt-font-scale: 120%', $html);
         $this->assertStringNotContainsString('Instagram: @pizza-documento', $html);
         $this->assertStringContainsString('Cliente &lt;script&gt;', $html);
         $this->assertStringContainsString('Tel. 555-0199', $html);

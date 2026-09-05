@@ -180,7 +180,7 @@ class CatalogManagementTest extends TestCase
             'order_date' => today(),
             'daily_number' => 1,
             'status' => 'delivered',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
         ]);
         $orderItem = $order->items()->create([
             'combo_id' => $combo['id'],
@@ -215,7 +215,7 @@ class CatalogManagementTest extends TestCase
         $this->getJson('/api/combos?include_inactive=1')->assertOk()->assertJsonCount(2, '0.items');
         $this->postJson('/api/orders', [
             'status' => 'confirmed',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'items' => [[
                 'combo_id' => $combo['id'],
                 'quantity' => 1,

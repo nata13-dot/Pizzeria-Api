@@ -67,8 +67,8 @@ class ReceiptService
             'documentTitle' => 'Nota de venta #'.$order->daily_number,
             'createdDate' => $order->created_at->format('d/m/Y'),
             'createdTime' => $order->created_at->format('H:i'),
-            'customerName' => $order->customer?->name,
-            'customerPhone' => $order->customer?->phone ?: $order->delivery?->phone,
+            'customerName' => $order->customer?->name ?: $order->contact_name,
+            'customerPhone' => $order->customer?->phone ?: ($order->contact_phone ?: $order->delivery?->phone),
             'recipient' => $order->delivery?->recipient,
             'deliveryAddress' => $order->delivery?->address,
             'subtotal' => (float) $order->subtotal,
@@ -142,10 +142,10 @@ class ReceiptService
             'orderNumber' => $order->daily_number,
             'items' => $order->items->map(fn ($item) => $this->itemData($item))->all(),
             'receiptFontSize' => $receiptFontSize,
-            'receiptFontPixels' => match ($receiptFontSize) {
-                'large' => 12,
-                'medium' => 10,
-                default => 8,
+            'receiptFontScale' => match ($receiptFontSize) {
+                'large' => '120%',
+                'medium' => '100%',
+                default => '80%',
             },
         ];
     }

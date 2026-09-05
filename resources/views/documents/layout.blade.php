@@ -34,11 +34,12 @@
         .status { border: 1px solid {{ $primaryColor }}; border-radius: 5px; margin: 8px 0; padding: 8px; }
         .message { border-top: 1px dashed #aaa; font-weight: bold; margin-top: 20px; padding-top: 15px; text-align: center; }
         .print-button { background: {{ $primaryColor }}; border: 0; border-radius: 5px; color: #fff; cursor: pointer; margin-top: 18px; padding: 10px 16px; }
-        .print-document { font-size: var(--receipt-font-size, 8px); }
+        .document { font-size: 10px; }
+        .print-document { font-size: var(--receipt-font-scale, 80%); }
         .print-document h1 { font-size: 1.7em; }
         .print-document h2 { font-size: 1.4em; }
         .print-document h3 { font-size: 1em; }
-        .customer-ticket { font-size: var(--receipt-font-size, 8px); line-height: 1.15; }
+        .customer-ticket { font-size: var(--receipt-font-scale, 80%); line-height: 1.15; }
         .customer-ticket .business { border-bottom: 1px dashed #222; margin-bottom: 5px; padding-bottom: 4px; }
         .customer-ticket .business img { margin-bottom: 2px; max-height: 36px; max-width: 90px; }
         .customer-ticket .business h1 { font-size: 1.4em; line-height: 1.05; margin-bottom: 1px; text-transform: uppercase; }

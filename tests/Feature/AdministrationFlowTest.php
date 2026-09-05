@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\Purchase;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\BranchClock;
 use App\Services\CashReportService;
 use App\Services\ReceiptService;
 use Carbon\CarbonImmutable;
@@ -22,7 +23,7 @@ class AdministrationFlowTest extends TestCase
 
     private function order(User $u): Order
     {
-        $o = Order::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'order_date' => today(), 'daily_number' => 1, 'status' => 'delivered', 'type' => 'pickup', 'subtotal' => 200, 'total' => 200]);
+        $o = Order::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'order_date' => app(BranchClock::class)->today($u->branch_id), 'daily_number' => 1, 'status' => 'delivered', 'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567', 'subtotal' => 200, 'total' => 200]);
         $o->items()->create(['name' => 'Pizza grande', 'quantity' => 1, 'unit_price' => 200, 'total' => 200]);
         $o->payments()->create(['method' => 'cash', 'amount' => 200, 'user_id' => $u->id]);
 
@@ -51,17 +52,18 @@ class AdministrationFlowTest extends TestCase
     {
         $this->seed();
         $u = User::first();
+        $date = app(BranchClock::class)->today($u->branch_id);
         $this->order($u);
-        CashDay::create(['branch_id' => $u->branch_id, 'date' => today(), 'opened_by' => $u->id, 'opening_amount' => 100]);
-        Purchase::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'purchased_at' => today(), 'payment_source' => 'cash', 'total' => 50]);
-        Purchase::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'purchased_at' => today(), 'payment_source' => 'owner', 'total' => 80]);
-        $summary = app(CashReportService::class)->summary($u->branch_id, today()->toDateString());
+        CashDay::create(['branch_id' => $u->branch_id, 'date' => $date, 'opened_by' => $u->id, 'opening_amount' => 100]);
+        Purchase::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'purchased_at' => $date, 'payment_source' => 'cash', 'total' => 50]);
+        Purchase::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'purchased_at' => $date, 'payment_source' => 'owner', 'total' => 80]);
+        $summary = app(CashReportService::class)->summary($u->branch_id, $date->toDateString());
         $this->assertEquals(50, $summary['cash_purchases']);
         $this->assertEquals(250, $summary['expected_cash']);
 
-        $cancelled = Order::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'order_date' => today(), 'daily_number' => 2, 'status' => 'cancelled', 'type' => 'pickup', 'subtotal' => 999, 'discount' => 50, 'total' => 949]);
+        $cancelled = Order::create(['branch_id' => $u->branch_id, 'user_id' => $u->id, 'order_date' => today(), 'daily_number' => 2, 'status' => 'cancelled', 'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567', 'subtotal' => 999, 'discount' => 50, 'total' => 949]);
         $cancelled->payments()->create(['method' => 'cash', 'amount' => 949, 'user_id' => $u->id]);
-        $afterCancellation = app(CashReportService::class)->summary($u->branch_id, today()->toDateString());
+        $afterCancellation = app(CashReportService::class)->summary($u->branch_id, $date->toDateString());
         $this->assertEquals(200, $afterCancellation['cash']);
         $this->assertEquals(200, $afterCancellation['gross_sales']);
         $this->assertEquals(0, $afterCancellation['discounts']);
@@ -77,7 +79,8 @@ class AdministrationFlowTest extends TestCase
         $u = User::first();
         Sanctum::actingAs($u);
         $this->order($u);
-        $this->postJson('/api/reports/daily', ['date' => today()->toDateString()])->assertOk()->assertJsonPath('data.orders', 1)->assertJson(fn ($json) => $json->whereType('whatsapp_url', 'string')->etc());
+        $date = app(BranchClock::class)->today($u->branch_id)->toDateString();
+        $this->postJson('/api/reports/daily', ['date' => $date])->assertOk()->assertJsonPath('data.orders', 1)->assertJson(fn ($json) => $json->whereType('whatsapp_url', 'string')->etc());
     }
 
     public function test_cash_defaults_use_the_branch_date_near_utc_midnight(): void

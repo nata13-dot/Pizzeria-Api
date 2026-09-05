@@ -69,7 +69,7 @@ class LoyaltyCancellationTest extends TestCase
             'order_date' => today(),
             'daily_number' => Order::where('branch_id', $user->branch_id)->count() + 1,
             'status' => $status,
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'subtotal' => 100,
             'total' => 100,
         ]);

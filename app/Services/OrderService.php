@@ -12,6 +12,8 @@ use App\Models\InventoryMovement;
 use App\Models\Order;
 use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
+use App\Models\User;
+use App\Notifications\SystemAlertNotification;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -22,6 +24,7 @@ class OrderService
         private readonly BranchSettings $settings,
         private readonly InventoryService $inventory,
         private readonly RecipeResolver $recipes,
+        private readonly PushService $push,
     ) {}
 
     public function create(array $data, $user): Order
@@ -57,6 +60,8 @@ class OrderService
                 'type' => $data['type'],
                 'sales_channel' => $data['sales_channel'] ?? 'local',
                 'scheduled_at' => $data['scheduled_at'] ?? null,
+                'contact_name' => $data['contact_name'] ?? null,
+                'contact_phone' => $data['contact_phone'] ?? null,
                 'pending_expires_at' => $data['status'] === 'pending_payment'
                     ? now()->addMinutes(max(1, $this->settings->integer($branch->id, 'pending_payment_minutes')))
                     : null,
@@ -150,7 +155,7 @@ class OrderService
                 $this->validatePayment($order);
             }
             $order->histories()->create(['user_id' => $user->id, 'to_status' => $data['status']]);
-            $this->broadcastAfterCommit($order);
+            $this->broadcastAfterCommit($order, $user?->id);
 
             return $order->load($this->relations());
         });
@@ -612,18 +617,68 @@ class OrderService
             'to_status' => $to,
             'comment' => $comment,
         ]);
-        $this->broadcastAfterCommit($order);
+        $this->broadcastAfterCommit($order, $user?->id);
     }
 
-    private function broadcastAfterCommit(Order $order): void
+    private function broadcastAfterCommit(Order $order, ?int $actorId = null): void
     {
         $orderId = $order->id;
-        DB::afterCommit(function () use ($orderId): void {
+        DB::afterCommit(function () use ($orderId, $actorId): void {
             $fresh = Order::find($orderId);
             if ($fresh) {
                 OrderStatusChanged::dispatch($fresh);
+                $this->notifyStatusChange($fresh, $actorId);
             }
         });
+    }
+
+    private function notifyStatusChange(Order $order, ?int $actorId): void
+    {
+        $notification = match ($order->status) {
+            'kitchen_pending' => [
+                'permission' => 'kitchen.use',
+                'title' => 'Nuevo pedido para cocina',
+                'body' => "Pedido #{$order->daily_number} listo para preparar.",
+                'screen' => 'kitchen',
+            ],
+            'ready' => [
+                'permission' => $order->type === 'delivery' ? 'delivery.use' : 'pos.use',
+                'title' => $order->type === 'delivery' ? 'Pedido listo para repartir' : 'Pedido listo para entregar',
+                'body' => "Pedido #{$order->daily_number} está listo.",
+                'screen' => $order->type === 'delivery' ? 'delivery' : 'orders',
+            ],
+            'on_way' => [
+                'permission' => 'pos.use',
+                'title' => 'Pedido en reparto',
+                'body' => "Pedido #{$order->daily_number} salió a reparto.",
+                'screen' => 'orders',
+            ],
+            default => null,
+        };
+
+        if (! $notification) {
+            return;
+        }
+
+        $recipients = User::query()
+            ->with('role.permissions')
+            ->where('branch_id', $order->branch_id)
+            ->where('active', true)
+            ->when($actorId, fn ($query) => $query->whereKeyNot($actorId))
+            ->get()
+            ->filter(fn (User $user): bool => $user->role?->slug === 'administrador'
+                || $user->role?->permissions->contains('slug', $notification['permission']));
+
+        foreach ($recipients as $recipient) {
+            $payload = [
+                'order_id' => $order->id,
+                'daily_number' => $order->daily_number,
+                'status' => $order->status,
+                'screen' => $notification['screen'],
+            ];
+            $recipient->notify(new SystemAlertNotification($notification['title'], $notification['body'], $payload));
+            $this->push->send($recipient, $notification['title'], $notification['body'], $payload);
+        }
     }
 
     private function locked(Order $order): Order

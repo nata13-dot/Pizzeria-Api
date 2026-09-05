@@ -91,7 +91,7 @@ class AuthorizationTest extends TestCase
         $product = Product::create(['branch_id' => $other->id, 'name' => 'Producto externo', 'type' => 'other']);
         $variant = ProductVariant::create(['product_id' => $product->id, 'name' => 'Única', 'price' => 100]);
         Sanctum::actingAs($cashier);
-        $payload = ['status' => 'confirmed', 'type' => 'pickup', 'customer_id' => $customer->id, 'items' => [['product_variant_id' => $variant->id, 'quantity' => 1]], 'payments' => [['method' => 'cash', 'amount' => 100]]];
+        $payload = ['status' => 'confirmed', 'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567', 'customer_id' => $customer->id, 'items' => [['product_variant_id' => $variant->id, 'quantity' => 1]], 'payments' => [['method' => 'cash', 'amount' => 100]]];
         $this->postJson('/api/orders', $payload)->assertUnprocessable()->assertJsonValidationErrors('customer_id');
         unset($payload['customer_id']);
         $this->postJson('/api/orders', $payload)->assertNotFound();
@@ -155,7 +155,7 @@ class AuthorizationTest extends TestCase
             'order_date' => today(),
             'daily_number' => 1,
             'status' => 'kitchen_pending',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'subtotal' => 100,
             'total' => 100,
         ]);

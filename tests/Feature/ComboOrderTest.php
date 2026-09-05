@@ -32,7 +32,7 @@ class ComboOrderTest extends TestCase
         $recipe->items()->create(['ingredient_id' => $cheese->id, 'quantity' => 100, 'component' => 'base']);
         $combo = Combo::create(['branch_id' => $u->branch_id, 'name' => 'Doble pizza', 'price' => 350]);
         $component = $combo->items()->create(['product_variant_id' => $variant->id, 'quantity' => 2]);
-        $order = $this->postJson('/api/orders', ['status' => 'confirmed', 'type' => 'pickup', 'items' => [['combo_id' => $combo->id, 'quantity' => 1, 'components' => [['combo_item_id' => $component->id]]]], 'payments' => [['method' => 'cash', 'amount' => 350]]])->assertCreated()->assertJsonPath('total', 350)->assertJsonPath('items.0.components.0.name', 'Pizza Grande')->assertJsonPath('items.0.components.0.quantity', 2)->json();
+        $order = $this->postJson('/api/orders', ['status' => 'confirmed', 'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567', 'items' => [['combo_id' => $combo->id, 'quantity' => 1, 'components' => [['combo_item_id' => $component->id]]]], 'payments' => [['method' => 'cash', 'amount' => 350]]])->assertCreated()->assertJsonPath('total', 350)->assertJsonPath('items.0.components.0.name', 'Pizza Grande')->assertJsonPath('items.0.components.0.quantity', 2)->json();
         $this->postJson("/api/orders/{$order['id']}/send-to-kitchen")->assertOk();
         $this->assertEquals(800, $cheese->batches()->sum('available_quantity'));
     }

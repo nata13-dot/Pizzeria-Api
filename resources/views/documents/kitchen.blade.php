@@ -2,7 +2,7 @@
 
 @section('content')
 @php($receiptFontPixels = ['small' => 8, 'medium' => 10, 'large' => 12][$receiptFontSize ?? 'small'])
-<section class="print-document" data-print-font-size="{{ $receiptFontSize ?? 'small' }}" style="--receipt-font-size: {{ $receiptFontPixels }}px">
+<section class="print-document" data-print-font-size="{{ $receiptFontSize ?? 'small' }}" style="--receipt-font-scale: {{ $receiptFontScale }}">
     @include('documents._business')
 
     <h1>Comanda de cocina</h1>

@@ -9,6 +9,7 @@ use App\Models\IngredientPresentation;
 use App\Models\Role;
 use App\Models\Unit;
 use App\Models\User;
+use App\Services\BranchClock;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -194,8 +195,9 @@ class CashDayManagementTest extends TestCase
             'base_quantity' => 1,
             'active' => true,
         ]);
+        $date = app(BranchClock::class)->today($admin->branch_id)->toDateString();
         $payload = [
-            'purchased_at' => today()->toDateString(),
+            'purchased_at' => $date,
             'payment_source' => 'cash',
             'items' => [[
                 'ingredient_presentation_id' => $presentation->id,

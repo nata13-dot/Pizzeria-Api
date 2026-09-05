@@ -242,6 +242,7 @@ class OrderController extends Controller
     {
         return $r->validate([
             'status' => 'sometimes|in:draft,pending_payment,confirmed', 'type' => 'required|in:pickup,whatsapp,delivery,dine_in', 'sales_channel' => 'sometimes|in:local,whatsapp,phone,other', 'scheduled_at' => 'nullable|date|after:now',
+            'contact_name' => 'required_if:type,pickup|nullable|string|max:150', 'contact_phone' => 'required_if:type,pickup|nullable|string|max:30',
             'discount' => 'sometimes|numeric|min:0', 'delivery_fee' => 'sometimes|numeric|min:0', 'courtesy' => 'sometimes|boolean', 'collect_on_delivery' => 'sometimes|boolean', 'notes' => 'nullable|string',
             'items' => 'required|array|min:1', 'items.*.product_variant_id' => 'required_without:items.*.combo_id|exists:product_variants,id',
             'items.*.combo_id' => 'required_without:items.*.product_variant_id|exists:combos,id', 'items.*.quantity' => 'required|numeric|gt:0',
@@ -251,7 +252,7 @@ class OrderController extends Controller
             'items.*.components.*.notes' => 'nullable|string',
             'items.*.notes' => 'nullable|string', 'payments' => 'array', 'payments.*.method' => 'required|in:cash,transfer,courtesy', 'payments.*.amount' => 'required|numeric|min:0',
             'payments.*.reference' => 'nullable|string', 'delivery' => 'required_if:type,delivery|array', 'delivery.recipient' => 'required_with:delivery|string|max:150',
-            'delivery.phone' => 'required_with:delivery|string|max:30', 'delivery.address' => 'required_with:delivery|string|max:255', 'delivery.references' => 'nullable|string', 'delivery.map_url' => 'nullable|url', 'delivery.delivery_zone' => 'nullable|string|max:100',
+            'delivery.phone' => 'required_with:delivery|string|max:30', 'delivery.address' => 'required_with:delivery|string|max:255', 'delivery.references' => 'nullable|string', 'delivery.map_url' => ['nullable', 'url', 'max:2048', 'regex:/^https:\/\//i'], 'delivery.delivery_zone' => 'nullable|string|max:100',
         ]);
     }
 

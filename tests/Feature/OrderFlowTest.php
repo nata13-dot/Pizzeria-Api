@@ -49,7 +49,7 @@ class OrderFlowTest extends TestCase
 
     private function order(string $status = 'confirmed'): array
     {
-        return $this->postJson('/api/orders', ['status' => $status, 'type' => 'pickup', 'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]], 'payments' => $status === 'confirmed' ? [['method' => 'cash', 'amount' => 200]] : []])->assertCreated()->json();
+        return $this->postJson('/api/orders', ['status' => $status, 'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567', 'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]], 'payments' => $status === 'confirmed' ? [['method' => 'cash', 'amount' => 200]] : []])->assertCreated()->json();
     }
 
     private function actingAsRole(string $role): User
@@ -100,6 +100,43 @@ class OrderFlowTest extends TestCase
         $this->postJson('/api/orders', $payload)
             ->assertUnprocessable()
             ->assertJsonValidationErrors('delivery.address');
+    }
+
+    public function test_pickup_requires_and_stores_contact_details(): void
+    {
+        $payload = [
+            'status' => 'confirmed',
+            'type' => 'pickup',
+            'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]],
+            'payments' => [['method' => 'cash', 'amount' => 200]],
+        ];
+
+        $this->postJson('/api/orders', $payload)
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['contact_name', 'contact_phone']);
+
+        $this->postJson('/api/orders', $payload + [
+            'contact_name' => 'María López',
+            'contact_phone' => '222 123 4567',
+        ])->assertCreated()
+            ->assertJsonPath('contact_name', 'María López')
+            ->assertJsonPath('contact_phone', '222 123 4567');
+    }
+
+    public function test_order_statuses_notify_kitchen_and_delivery_roles(): void
+    {
+        $this->stock(500);
+        $kitchen = User::query()->whereHas('role', fn ($query) => $query->where('slug', 'cocina'))->firstOrFail();
+        $deliveryUser = User::query()->whereHas('role', fn ($query) => $query->where('slug', 'repartidor'))->firstOrFail();
+        $order = $this->deliveryOrder();
+
+        $this->postJson("/api/orders/{$order['id']}/send-to-kitchen")->assertOk();
+        $this->assertSame('Nuevo pedido para cocina', $kitchen->notifications()->latest()->first()?->data['title']);
+
+        foreach (['preparing', 'prepared', 'ready'] as $status) {
+            $this->postJson("/api/orders/{$order['id']}/status", ['status' => $status])->assertOk();
+        }
+        $this->assertSame('Pedido listo para repartir', $deliveryUser->notifications()->latest()->first()?->data['title']);
     }
 
     public function test_inventory_is_only_deducted_when_sent_to_kitchen(): void
@@ -340,7 +377,7 @@ class OrderFlowTest extends TestCase
         $pending = $this->order('pending_payment');
         $confirmed = $this->postJson('/api/orders', [
             'status' => 'confirmed',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 2]],
             'payments' => [['method' => 'cash', 'amount' => 400]],
         ])->assertCreated()->json();
@@ -378,7 +415,7 @@ class OrderFlowTest extends TestCase
         $scheduledAt = now()->addHours(2)->startOfSecond();
         $order = $this->postJson('/api/orders', [
             'status' => 'confirmed',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'scheduled_at' => $scheduledAt->toIso8601String(),
             'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]],
             'payments' => [['method' => 'cash', 'amount' => 200]],
@@ -399,7 +436,7 @@ class OrderFlowTest extends TestCase
     {
         $payload = [
             'status' => 'confirmed',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]],
             'payments' => [['method' => 'cash', 'amount' => 200]],
         ];

@@ -29,7 +29,7 @@ class LoyaltyFlowTest extends TestCase
             'order_date' => today(),
             'daily_number' => 1,
             'status' => 'delivered',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'subtotal' => 250,
             'total' => 250,
         ]);
@@ -46,7 +46,7 @@ class LoyaltyFlowTest extends TestCase
             'order_date' => today(),
             'daily_number' => 2,
             'status' => 'draft',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'subtotal' => 100,
             'total' => 100,
         ]);

@@ -486,7 +486,7 @@ class ReportFlowTest extends TestCase
             'order_date' => $this->date,
             'daily_number' => 1,
             'status' => 'delivered',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'subtotal' => 0,
             'discount' => 0,
             'total' => 0,

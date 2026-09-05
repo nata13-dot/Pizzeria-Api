@@ -39,7 +39,7 @@ class OperationalSettingsTest extends TestCase
         $variant = $this->variant($cashier);
         $this->postJson('/api/orders', [
             'status' => 'confirmed',
-            'type' => 'pickup',
+            'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
             'items' => [['product_variant_id' => $variant->id, 'quantity' => 1]],
             'payments' => [['method' => 'transfer', 'amount' => 100]],
         ])->assertUnprocessable()->assertJsonValidationErrors('payments');
