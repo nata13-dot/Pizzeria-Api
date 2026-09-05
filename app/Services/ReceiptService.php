@@ -124,6 +124,9 @@ class ReceiptService
     private function commonData(Order $order, BusinessProfile $profile, string $receiptFontSize = 'small'): array
     {
         $showBusinessDetails = $profile->show_business_details !== false;
+        $receiptFontSize = in_array($receiptFontSize, ['small', 'medium', 'large'], true)
+            ? $receiptFontSize
+            : 'small';
 
         return [
             'primaryColor' => $this->validColor($profile->primary_color, '#cf4b32'),
@@ -138,7 +141,12 @@ class ReceiptService
             'receiptFooter' => $profile->receipt_footer,
             'orderNumber' => $order->daily_number,
             'items' => $order->items->map(fn ($item) => $this->itemData($item))->all(),
-            'receiptFontSize' => in_array($receiptFontSize, ['small', 'medium', 'large'], true) ? $receiptFontSize : 'small',
+            'receiptFontSize' => $receiptFontSize,
+            'receiptFontPixels' => match ($receiptFontSize) {
+                'large' => 12,
+                'medium' => 10,
+                default => 8,
+            },
         ];
     }
 

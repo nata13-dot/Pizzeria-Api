@@ -45,9 +45,23 @@ class DatabaseSeeder extends Seeder
             'cash.manage' => ['cajero'], 'documents.generate' => ['cajero', 'cocina', 'repartidor'],
             'stock.override' => [], 'orders.cancel_advanced' => [],
         ];
+        $permissionNames = [
+            'pos.use' => 'Usar caja / punto de venta',
+            'orders.view' => 'Ver pedidos',
+            'kitchen.use' => 'Usar pantalla de cocina',
+            'delivery.use' => 'Gestionar reparto',
+            'inventory.view' => 'Ver inventario',
+            'purchases.manage' => 'Gestionar compras',
+            'production.manage' => 'Gestionar producción',
+            'customers.manage' => 'Gestionar clientes',
+            'cash.manage' => 'Gestionar cortes de caja',
+            'documents.generate' => 'Generar tickets y documentos',
+            'stock.override' => 'Autorizar faltantes de inventario',
+            'orders.cancel_advanced' => 'Cancelar pedidos avanzados',
+        ];
         $permissions = collect($permissionMap)->mapWithKeys(
             fn (array $roleSlugs, string $slug) => [
-                $slug => Permission::firstOrCreate(['slug' => $slug], ['name' => $slug]),
+                $slug => Permission::updateOrCreate(['slug' => $slug], ['name' => $permissionNames[$slug]]),
             ],
         );
         foreach ($roles as $roleSlug => $role) {
