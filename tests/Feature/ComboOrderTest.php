@@ -36,4 +36,34 @@ class ComboOrderTest extends TestCase
         $this->postJson("/api/orders/{$order['id']}/send-to-kitchen")->assertOk();
         $this->assertEquals(800, $cheese->batches()->sum('available_quantity'));
     }
+
+    public function test_combo_accepts_an_independent_selection_for_each_component_unit(): void
+    {
+        $this->seed();
+        $user = User::first();
+        Sanctum::actingAs($user);
+        $gram = Unit::where('symbol', 'g')->first();
+        $ingredient = Ingredient::create(['branch_id' => $user->branch_id, 'base_unit_id' => $gram->id, 'name' => 'Cono']);
+        InventoryBatch::create(['branch_id' => $user->branch_id, 'ingredient_id' => $ingredient->id, 'received_at' => today(), 'initial_quantity' => 1000, 'available_quantity' => 1000]);
+        $product = Product::create(['branch_id' => $user->branch_id, 'name' => 'Cono pizza', 'type' => 'cone']);
+        $variant = ProductVariant::create(['product_id' => $product->id, 'name' => 'Individual', 'price' => 50]);
+        $recipe = Recipe::create(['product_variant_id' => $variant->id, 'name' => 'Cono base']);
+        $recipe->items()->create(['ingredient_id' => $ingredient->id, 'quantity' => 25, 'component' => 'base']);
+        $combo = Combo::create(['branch_id' => $user->branch_id, 'name' => 'Cuatro conos', 'price' => 180]);
+        $component = $combo->items()->create(['product_variant_id' => $variant->id, 'quantity' => 4]);
+        $components = collect(range(1, 4))->map(fn (int $unit) => [
+            'combo_item_id' => $component->id,
+            'unit_index' => $unit,
+            'notes' => "Cono {$unit}",
+        ])->all();
+
+        $this->postJson('/api/orders', [
+            'status' => 'confirmed', 'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567',
+            'items' => [['combo_id' => $combo->id, 'quantity' => 1, 'components' => $components]],
+            'payments' => [['method' => 'cash', 'amount' => 180]],
+        ])->assertCreated()
+            ->assertJsonCount(4, 'items.0.components')
+            ->assertJsonPath('items.0.components.0.notes', 'Cono 1')
+            ->assertJsonPath('items.0.components.3.notes', 'Cono 4');
+    }
 }

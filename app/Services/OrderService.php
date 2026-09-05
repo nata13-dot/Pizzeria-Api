@@ -446,18 +446,32 @@ class OrderService
         $combo = Combo::with(['items.variant.product', 'items.options'])->findOrFail($row['combo_id']);
         abort_unless($combo->branch_id === $order->branch_id && $combo->active, 422);
         $selectionRows = collect($row['components'] ?? []);
-        if ($selectionRows->pluck('combo_item_id')->unique()->count() !== $selectionRows->count()
+        if ($selectionRows->map(fn ($selection) => ($selection['combo_item_id'] ?? '').':'.($selection['unit_index'] ?? 'all'))->unique()->count() !== $selectionRows->count()
             || $selectionRows->pluck('combo_item_id')->diff($combo->items->pluck('id'))->isNotEmpty()) {
             throw ValidationException::withMessages(['items' => 'El combo contiene un componente inválido o repetido.']);
         }
-        $selections = $selectionRows->keyBy('combo_item_id');
 
         $totals = [];
         $components = [];
         $unitExtras = 0.0;
         foreach ($combo->items as $component) {
             abort_unless($component->variant?->product?->branch_id === $order->branch_id, 422);
-            $selection = $selections->get($component->id, []);
+            $componentSelections = $selectionRows->where('combo_item_id', $component->id)->values();
+            $indexedSelections = $componentSelections->whereNotNull('unit_index')->sortBy('unit_index')->values();
+            if ($indexedSelections->isNotEmpty()) {
+                $componentQuantity = (float) $component->quantity;
+                $expectedUnits = (int) $componentQuantity;
+                if ($componentQuantity !== (float) $expectedUnits
+                    || $indexedSelections->pluck('unit_index')->map(fn ($index) => (int) $index)->all() !== range(1, $expectedUnits)) {
+                    throw ValidationException::withMessages(['items' => 'Debes configurar cada unidad del componente del paquete.']);
+                }
+                $selectionsToProcess = $indexedSelections->map(fn ($selection) => ['selection' => $selection, 'quantity' => 1.0]);
+            } else {
+                $selectionsToProcess = collect([['selection' => $componentSelections->first() ?? [], 'quantity' => (float) $component->quantity]]);
+            }
+            foreach ($selectionsToProcess as $unit) {
+            $selection = $unit['selection'];
+            $selectionQuantity = $unit['quantity'];
             $flavors = array_values(array_unique($selection['flavor_ids'] ?? []));
             $modifierIds = array_values(array_unique($selection['modifier_ids'] ?? []));
             if ($component->flavor_required && empty($flavors)) {
@@ -481,7 +495,7 @@ class OrderService
             );
             foreach ($resolved as $ingredient) {
                 $totals[$ingredient['ingredient_id']] = ($totals[$ingredient['ingredient_id']] ?? 0)
-                    + $ingredient['quantity'] * $component->quantity * $row['quantity'];
+                    + $ingredient['quantity'] * $selectionQuantity * $row['quantity'];
             }
 
             $modifierRules = $component->variant->modifierRules()
@@ -492,12 +506,12 @@ class OrderService
                 fn ($rule) => (float) ($rule->price_override ?? $rule->modifier->price),
             );
             $unitExtras += ($this->selectionExtra($component->variant, $flavors) + $modifierExtra)
-                * (float) $component->quantity;
+                * $selectionQuantity;
             $components[] = [
                 'combo_item_id' => $component->id,
                 'product_variant_id' => $component->variant->id,
                 'name' => trim($component->variant->product->name.' '.$component->variant->name),
-                'quantity' => (float) $component->quantity * (float) $row['quantity'],
+                'quantity' => $selectionQuantity * (float) $row['quantity'],
                 'flavors' => ProductFlavor::query()->whereIn('id', $flavors)->pluck('name')->all(),
                 'modifiers' => $modifierRules->map(fn ($rule) => [
                     'id' => $rule->modifier_id,
@@ -506,6 +520,7 @@ class OrderService
                 ])->values()->all(),
                 'notes' => $selection['notes'] ?? null,
             ];
+            }
         }
 
         $unitPrice = (float) $combo->price + $unitExtras;

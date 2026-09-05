@@ -248,6 +248,7 @@ class OrderController extends Controller
             'items.*.combo_id' => 'required_without:items.*.product_variant_id|exists:combos,id', 'items.*.quantity' => 'required|numeric|gt:0',
             'items.*.flavor_ids' => 'array', 'items.*.flavor_ids.*' => 'exists:product_flavors,id', 'items.*.modifier_ids' => 'array', 'items.*.modifier_ids.*' => 'exists:modifiers,id',
             'items.*.components' => 'array', 'items.*.components.*.combo_item_id' => 'required|exists:combo_items,id', 'items.*.components.*.flavor_ids' => 'array',
+            'items.*.components.*.unit_index' => 'sometimes|integer|min:1',
             'items.*.components.*.flavor_ids.*' => 'exists:product_flavors,id', 'items.*.components.*.modifier_ids' => 'array', 'items.*.components.*.modifier_ids.*' => 'exists:modifiers,id',
             'items.*.components.*.notes' => 'nullable|string',
             'items.*.notes' => 'nullable|string', 'payments' => 'array', 'payments.*.method' => 'required|in:cash,transfer,courtesy', 'payments.*.amount' => 'required|numeric|min:0',
