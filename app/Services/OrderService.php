@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Notifications\SystemAlertNotification;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class OrderService
@@ -626,7 +627,14 @@ class OrderService
         DB::afterCommit(function () use ($orderId, $actorId): void {
             $fresh = Order::find($orderId);
             if ($fresh) {
-                OrderStatusChanged::dispatch($fresh);
+                try {
+                    OrderStatusChanged::dispatch($fresh);
+                } catch (\Throwable $exception) {
+                    Log::warning('No se pudo publicar el cambio de pedido en tiempo real.', [
+                        'order_id' => $fresh->id,
+                        'exception' => $exception->getMessage(),
+                    ]);
+                }
                 $this->notifyStatusChange($fresh, $actorId);
             }
         });
@@ -664,7 +672,6 @@ class OrderService
             ->with('role.permissions')
             ->where('branch_id', $order->branch_id)
             ->where('active', true)
-            ->when($actorId, fn ($query) => $query->whereKeyNot($actorId))
             ->get()
             ->filter(fn (User $user): bool => $user->role?->slug === 'administrador'
                 || $user->role?->permissions->contains('slug', $notification['permission']));

@@ -132,6 +132,7 @@ class OrderFlowTest extends TestCase
 
         $this->postJson("/api/orders/{$order['id']}/send-to-kitchen")->assertOk();
         $this->assertSame('Nuevo pedido para cocina', $kitchen->notifications()->latest()->first()?->data['title']);
+        $this->assertSame('Nuevo pedido para cocina', $this->user->notifications()->latest()->first()?->data['title']);
 
         foreach (['preparing', 'prepared', 'ready'] as $status) {
             $this->postJson("/api/orders/{$order['id']}/status", ['status' => $status])->assertOk();
