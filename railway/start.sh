@@ -5,6 +5,10 @@ set -eu
 database_connection="${DB_CONNECTION:-sqlite}"
 
 if [ "$database_connection" = "sqlite" ]; then
+    if [ "${APP_ENV:-production}" = "production" ] && [ "${SQLITE_PERSISTENT_VOLUME:-false}" != "true" ]; then
+        echo "SQLite sin volumen persistente puede borrar todos los datos al desplegar. Configura PostgreSQL o SQLITE_PERSISTENT_VOLUME=true con DB_DATABASE dentro de un volumen Railway." >&2
+        exit 1
+    fi
     database_file="${DB_DATABASE:-database/database.sqlite}"
     case "$database_file" in
         /*) ;;

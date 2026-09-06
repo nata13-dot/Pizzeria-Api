@@ -81,11 +81,11 @@ Para validar una instalación limpia sin tocar la base de datos de trabajo, usa 
 - Define `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL`, CORS y los hosts reales de Reverb.
 - Ejecuta `php artisan config:cache` y `php artisan route:cache` después de establecer el entorno.
 - Mantén activos el servidor Reverb, el worker requerido por tu infraestructura y el cron de `php artisan schedule:run`.
-- Configura respaldos nativos si se cambia SQLite por otro motor.
+- En Ajustes, un administrador puede generar y descargar un respaldo lógico completo en JSON. Conserva además los respaldos automáticos del proveedor de PostgreSQL.
 
 ### Railway
 
-El archivo `railway.json` ejecuta `railway/start.sh` en cada despliegue. El script prepara SQLite cuando no se configuró otro motor, ejecuta migraciones y seeders, almacena las cachés de Laravel y levanta la API en el puerto asignado por Railway.
+El archivo `railway.json` ejecuta `railway/start.sh` en cada despliegue. El script ejecuta migraciones y seeders no destructivos, almacena las cachés de Laravel y levanta la API en el puerto asignado por Railway. En producción bloquea SQLite salvo que se confirme expresamente el uso de un volumen persistente.
 
 Configura como mínimo estas variables en el servicio:
 
@@ -98,6 +98,6 @@ PIZZERIA_SEED_PASSWORD=una-contraseña-segura
 CORS_ALLOWED_ORIGINS=https://localhost
 ```
 
-Si `APP_KEY` o `PIZZERIA_SEED_PASSWORD` todavía no existen, el script permite el primer arranque generando una clave temporal y usando `Pizzeria123!` como contraseña administrativa inicial. Configura valores permanentes inmediatamente después para conservar sesiones y proteger la cuenta.
+`APP_KEY` y `PIZZERIA_SEED_PASSWORD` son obligatorias durante el arranque. El seeder sólo utiliza la contraseña al crear la cuenta administrativa por primera vez; nunca vuelve a escribir una cuenta ni los datos comerciales existentes.
 
-Para datos persistentes se recomienda agregar PostgreSQL y establecer `DB_CONNECTION=pgsql` y `DB_URL=${{Postgres.DATABASE_URL}}`. SQLite dentro del contenedor se reinicia con un despliegue salvo que `DB_DATABASE` apunte a un volumen persistente.
+Para datos persistentes agrega PostgreSQL y establece `DB_CONNECTION=pgsql` y `DB_URL=${{Postgres.DATABASE_URL}}`. Si deliberadamente usas SQLite, `DB_DATABASE` debe apuntar a un volumen Railway persistente y debes establecer `SQLITE_PERSISTENT_VOLUME=true`.

@@ -74,15 +74,16 @@ class DatabaseSeeder extends Seeder
             );
         }
 
+        $existingAdmin = User::where('email', 'admin@pizzeria.local')->first();
         $seedPassword = env('PIZZERIA_SEED_PASSWORD');
         if (! $seedPassword && app()->environment(['local', 'testing'])) {
             $seedPassword = 'Pizzeria123!';
         }
-        if (! $seedPassword) {
+        if (! $existingAdmin && ! $seedPassword) {
             throw new \RuntimeException('Configura PIZZERIA_SEED_PASSWORD antes de crear el usuario administrador.');
         }
 
-        User::updateOrCreate(['email' => 'admin@pizzeria.local'], [
+        User::firstOrCreate(['email' => 'admin@pizzeria.local'], [
             'name' => 'Administrador',
             'username' => 'admin',
             'password' => $seedPassword,
@@ -129,13 +130,18 @@ class DatabaseSeeder extends Seeder
             return;
         }
 
-        BusinessProfile::updateOrCreate(['branch_id' => $branch->id], [
+        BusinessProfile::firstOrCreate(['branch_id' => $branch->id], [
             'name' => 'Pizzeria Demo',
             'phone' => '555-0101',
             'address' => 'Sucursal matriz',
             'primary_color' => '#cf4b32',
             'receipt_footer' => 'Gracias por su compra.',
         ]);
+
+        // Los datos de demostración nunca deben modificar una instalación desplegada.
+        if (! app()->environment('local')) {
+            return;
+        }
 
         $g = Unit::where('symbol', 'g')->first();
         $pz = Unit::where('symbol', 'pz')->first();

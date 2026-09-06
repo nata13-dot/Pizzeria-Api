@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\CashDayController;
 use App\Http\Controllers\Api\CatalogController;
 use App\Http\Controllers\Api\ComboController;
 use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\DatabaseBackupController;
 use App\Http\Controllers\Api\IngredientController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\ModifierController;
@@ -22,6 +23,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
 Route::get('/order-documents/{d}/download', [AdministrationController::class, 'download'])->middleware('signed')->name('order-documents.download');
+Route::get('/database-backups/download', [DatabaseBackupController::class, 'download'])->middleware('signed')->name('database-backups.download');
 
 Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
@@ -116,6 +118,7 @@ Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function ():
     Route::put('/business-profile', [AdministrationController::class, 'updateProfile'])->middleware('permission:admin.only');
     Route::get('/settings', [AdministrationController::class, 'settings'])->middleware('permission:admin.only');
     Route::put('/settings', [AdministrationController::class, 'updateSettings'])->middleware('permission:admin.only');
+    Route::post('/database-backups', [DatabaseBackupController::class, 'create'])->middleware('permission:admin.only');
     Route::post('/orders/{o}/generate-document', [AdministrationController::class, 'document'])->middleware('permission:documents.generate');
     Route::get('/cash-days', [CashDayController::class, 'index'])->middleware('permission:cash.manage');
     Route::get('/cash-days/current', [CashDayController::class, 'current'])->middleware('permission:cash.manage');
