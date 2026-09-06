@@ -6,11 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class ComboItem extends Model
 {
-    protected $fillable = ['combo_id', 'product_variant_id', 'quantity', 'flavor_required', 'active'];
+    protected $fillable = ['combo_id', 'product_variant_id', 'quantity', 'flavor_required', 'flavor_selection_count', 'active'];
 
     protected function casts(): array
     {
-        return ['quantity' => 'decimal:2', 'flavor_required' => 'boolean', 'active' => 'boolean'];
+        return ['quantity' => 'decimal:2', 'flavor_required' => 'boolean', 'flavor_selection_count' => 'integer', 'active' => 'boolean'];
     }
 
     public function combo()

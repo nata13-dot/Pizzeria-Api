@@ -161,6 +161,7 @@ class ComboController extends Controller
             'items.*.product_variant_id' => ['required', 'integer'],
             'items.*.quantity' => ['required', 'numeric', 'gt:0', 'max:99999999.99'],
             'items.*.flavor_required' => ['sometimes', 'boolean'],
+            'items.*.flavor_selection_count' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:20'],
             'items.*.active' => ['sometimes', 'boolean'],
             'items.*.options' => ['sometimes', 'array'],
             'items.*.options.*.product_flavor_id' => ['sometimes', 'nullable', 'integer'],
@@ -185,7 +186,13 @@ class ComboController extends Controller
             }
 
             $row['active'] = array_key_exists('active', $row) ? (bool) $row['active'] : ($current?->active ?? true);
-            $row['flavor_required'] = (bool) ($row['flavor_required'] ?? false);
+            $row['flavor_required'] = (bool) ($row['flavor_required'] ?? $current?->flavor_required ?? false);
+            $row['flavor_selection_count'] = array_key_exists('flavor_selection_count', $row)
+                ? $row['flavor_selection_count']
+                : $current?->flavor_selection_count;
+            if ($row['flavor_selection_count'] !== null) {
+                $row['flavor_required'] = true;
+            }
             $row['options'] = $row['options'] ?? [];
             $variant = ProductVariant::with('product')->find($row['product_variant_id']);
             if (! $variant || $variant->product?->branch_id !== $request->user()->branch_id) {
@@ -246,6 +253,15 @@ class ComboController extends Controller
                     }
                 }
             }
+            if ($row['flavor_selection_count'] !== null) {
+                $maximum = (int) $variant->max_flavors;
+                $optionFlavorCount = collect($row['options'])->pluck('product_flavor_id')->filter()->count();
+                if ($row['flavor_selection_count'] > $maximum || ($optionFlavorCount > 0 && $row['flavor_selection_count'] > $optionFlavorCount)) {
+                    throw ValidationException::withMessages([
+                        "items.{$index}.flavor_selection_count" => 'La cantidad obligatoria de sabores supera los sabores permitidos por la variante o el paquete.',
+                    ]);
+                }
+            }
 
             return $row;
         })->values()->all();
@@ -261,6 +277,7 @@ class ComboController extends Controller
                 'product_variant_id' => $item->product_variant_id,
                 'quantity' => $item->quantity,
                 'flavor_required' => $item->flavor_required,
+                'flavor_selection_count' => $item->flavor_selection_count,
                 'active' => $item->active,
                 'options' => $item->options->map->only(['product_flavor_id', 'modifier_id'])->all(),
             ])->all();

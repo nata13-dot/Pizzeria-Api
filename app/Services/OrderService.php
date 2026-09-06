@@ -470,56 +470,61 @@ class OrderService
                 $selectionsToProcess = collect([['selection' => $componentSelections->first() ?? [], 'quantity' => (float) $component->quantity]]);
             }
             foreach ($selectionsToProcess as $unit) {
-            $selection = $unit['selection'];
-            $selectionQuantity = $unit['quantity'];
-            $flavors = array_values(array_unique($selection['flavor_ids'] ?? []));
-            $modifierIds = array_values(array_unique($selection['modifier_ids'] ?? []));
-            if ($component->flavor_required && empty($flavors)) {
-                throw ValidationException::withMessages([
-                    'items' => "Debes elegir sabor para {$component->variant->name}.",
-                ]);
-            }
-            $allowedFlavors = $component->options->pluck('product_flavor_id')->filter();
-            if ($allowedFlavors->isNotEmpty() && collect($flavors)->diff($allowedFlavors)->isNotEmpty()) {
-                throw ValidationException::withMessages(['items' => 'El combo contiene un sabor no permitido.']);
-            }
-            $allowedModifiers = $component->options->pluck('modifier_id')->filter();
-            if ($allowedModifiers->isNotEmpty() && collect($modifierIds)->diff($allowedModifiers)->isNotEmpty()) {
-                throw ValidationException::withMessages(['items' => 'El combo contiene un modificador no permitido.']);
-            }
+                $selection = $unit['selection'];
+                $selectionQuantity = $unit['quantity'];
+                $flavors = array_values(array_unique($selection['flavor_ids'] ?? []));
+                $modifierIds = array_values(array_unique($selection['modifier_ids'] ?? []));
+                if ($component->flavor_required && empty($flavors)) {
+                    throw ValidationException::withMessages([
+                        'items' => "Debes elegir sabor para {$component->variant->name}.",
+                    ]);
+                }
+                if ($component->flavor_selection_count !== null && count($flavors) !== $component->flavor_selection_count) {
+                    throw ValidationException::withMessages([
+                        'items' => "Debes elegir exactamente {$component->flavor_selection_count} sabor(es) para {$component->variant->name}.",
+                    ]);
+                }
+                $allowedFlavors = $component->options->pluck('product_flavor_id')->filter();
+                if ($allowedFlavors->isNotEmpty() && collect($flavors)->diff($allowedFlavors)->isNotEmpty()) {
+                    throw ValidationException::withMessages(['items' => 'El combo contiene un sabor no permitido.']);
+                }
+                $allowedModifiers = $component->options->pluck('modifier_id')->filter();
+                if ($allowedModifiers->isNotEmpty() && collect($modifierIds)->diff($allowedModifiers)->isNotEmpty()) {
+                    throw ValidationException::withMessages(['items' => 'El combo contiene un modificador no permitido.']);
+                }
 
-            $resolved = $this->recipes->resolve(
-                $component->variant,
-                $flavors,
-                $modifierIds,
-            );
-            foreach ($resolved as $ingredient) {
-                $totals[$ingredient['ingredient_id']] = ($totals[$ingredient['ingredient_id']] ?? 0)
-                    + $ingredient['quantity'] * $selectionQuantity * $row['quantity'];
-            }
+                $resolved = $this->recipes->resolve(
+                    $component->variant,
+                    $flavors,
+                    $modifierIds,
+                );
+                foreach ($resolved as $ingredient) {
+                    $totals[$ingredient['ingredient_id']] = ($totals[$ingredient['ingredient_id']] ?? 0)
+                        + $ingredient['quantity'] * $selectionQuantity * $row['quantity'];
+                }
 
-            $modifierRules = $component->variant->modifierRules()
-                ->with('modifier')
-                ->whereIn('modifier_id', $modifierIds)
-                ->get();
-            $modifierExtra = $modifierRules->sum(
-                fn ($rule) => (float) ($rule->price_override ?? $rule->modifier->price),
-            );
-            $unitExtras += ($this->selectionExtra($component->variant, $flavors) + $modifierExtra)
-                * $selectionQuantity;
-            $components[] = [
-                'combo_item_id' => $component->id,
-                'product_variant_id' => $component->variant->id,
-                'name' => trim($component->variant->product->name.' '.$component->variant->name),
-                'quantity' => $selectionQuantity * (float) $row['quantity'],
-                'flavors' => ProductFlavor::query()->whereIn('id', $flavors)->pluck('name')->all(),
-                'modifiers' => $modifierRules->map(fn ($rule) => [
-                    'id' => $rule->modifier_id,
-                    'name' => $rule->modifier->name,
-                    'price' => (float) ($rule->price_override ?? $rule->modifier->price),
-                ])->values()->all(),
-                'notes' => $selection['notes'] ?? null,
-            ];
+                $modifierRules = $component->variant->modifierRules()
+                    ->with('modifier')
+                    ->whereIn('modifier_id', $modifierIds)
+                    ->get();
+                $modifierExtra = $modifierRules->sum(
+                    fn ($rule) => (float) ($rule->price_override ?? $rule->modifier->price),
+                );
+                $unitExtras += ($this->selectionExtra($component->variant, $flavors) + $modifierExtra)
+                    * $selectionQuantity;
+                $components[] = [
+                    'combo_item_id' => $component->id,
+                    'product_variant_id' => $component->variant->id,
+                    'name' => trim($component->variant->product->name.' '.$component->variant->name),
+                    'quantity' => $selectionQuantity * (float) $row['quantity'],
+                    'flavors' => ProductFlavor::query()->whereIn('id', $flavors)->pluck('name')->all(),
+                    'modifiers' => $modifierRules->map(fn ($rule) => [
+                        'id' => $rule->modifier_id,
+                        'name' => $rule->modifier->name,
+                        'price' => (float) ($rule->price_override ?? $rule->modifier->price),
+                    ])->values()->all(),
+                    'notes' => $selection['notes'] ?? null,
+                ];
             }
         }
 

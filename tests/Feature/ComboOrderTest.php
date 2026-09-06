@@ -6,6 +6,7 @@ use App\Models\Combo;
 use App\Models\Ingredient;
 use App\Models\InventoryBatch;
 use App\Models\Product;
+use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
 use App\Models\Recipe;
 use App\Models\Unit;
@@ -65,5 +66,32 @@ class ComboOrderTest extends TestCase
             ->assertJsonCount(4, 'items.0.components')
             ->assertJsonPath('items.0.components.0.notes', 'Cono 1')
             ->assertJsonPath('items.0.components.3.notes', 'Cono 4');
+    }
+
+    public function test_combo_can_require_an_exact_number_of_wing_flavors(): void
+    {
+        $this->seed();
+        $user = User::first();
+        Sanctum::actingAs($user);
+        $unit = Unit::where('symbol', 'g')->firstOrFail();
+        $ingredient = Ingredient::create(['branch_id' => $user->branch_id, 'base_unit_id' => $unit->id, 'name' => 'Alitas tricombo']);
+        InventoryBatch::create(['branch_id' => $user->branch_id, 'ingredient_id' => $ingredient->id, 'received_at' => today(), 'initial_quantity' => 1000, 'available_quantity' => 1000]);
+        $product = Product::create(['branch_id' => $user->branch_id, 'name' => 'Alitas', 'type' => 'wings']);
+        $variant = ProductVariant::create(['product_id' => $product->id, 'name' => '20 piezas', 'price' => 200, 'max_flavors' => 2]);
+        $flavors = collect(['BBQ', 'Mango'])->map(function (string $name) use ($product, $variant, $ingredient): ProductFlavor {
+            $flavor = ProductFlavor::create(['product_id' => $product->id, 'name' => $name]);
+            $recipe = Recipe::create(['product_variant_id' => $variant->id, 'product_flavor_id' => $flavor->id, 'name' => "20 piezas {$name}"]);
+            $recipe->items()->create(['ingredient_id' => $ingredient->id, 'quantity' => 20, 'component' => 'base']);
+
+            return $flavor;
+        });
+        $combo = Combo::create(['branch_id' => $user->branch_id, 'name' => 'Tricombo grande', 'price' => 300]);
+        $component = $combo->items()->create(['product_variant_id' => $variant->id, 'quantity' => 1, 'flavor_required' => true, 'flavor_selection_count' => 2]);
+        $component->options()->createMany($flavors->map(fn (ProductFlavor $flavor) => ['product_flavor_id' => $flavor->id])->all());
+        $payload = ['status' => 'confirmed', 'type' => 'pickup', 'contact_name' => 'Cliente local', 'contact_phone' => '5551234567', 'items' => [['combo_id' => $combo->id, 'quantity' => 1, 'components' => [['combo_item_id' => $component->id, 'flavor_ids' => [$flavors[0]->id]]]]], 'payments' => [['method' => 'cash', 'amount' => 300]]];
+
+        $this->postJson('/api/orders', $payload)->assertUnprocessable()->assertJsonValidationErrors('items');
+        $payload['items'][0]['components'][0]['flavor_ids'][] = $flavors[1]->id;
+        $this->postJson('/api/orders', $payload)->assertCreated()->assertJsonCount(2, 'items.0.components.0.flavors');
     }
 }
