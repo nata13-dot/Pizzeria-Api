@@ -129,7 +129,12 @@ class UserController extends Controller
 
     public function device(Request $r)
     {
-        $d = $r->validate(['push_token' => 'required|string|max:255', 'name' => 'required|string|max:100', 'platform' => 'nullable|string|max:30']);
+        $d = $r->validate([
+            'push_token' => 'required|string|max:255', 'name' => 'required|string|max:100', 'platform' => 'nullable|string|max:30',
+            'notification_sound_mode' => 'sometimes|in:fixed,random',
+            'notification_channels' => 'sometimes|array|min:1|max:8',
+            'notification_channels.*' => ['required', 'string', 'max:120', 'distinct', 'regex:/^orders_arrival_(tone_v3_(default|bell|kitchen|soft|ding)|custom_v1_custom_[a-z0-9_]+)$/'],
+        ]);
 
         return response()->json($r->user()->devices()->updateOrCreate(['push_token' => $d['push_token']], $d + ['last_seen_at' => now(), 'active' => true]), 201);
     }

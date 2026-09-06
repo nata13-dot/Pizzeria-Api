@@ -6,10 +6,10 @@ use Illuminate\Database\Eloquent\Model;
 
 class UserDevice extends Model
 {
-    protected $fillable = ['user_id', 'name', 'platform', 'push_token', 'last_seen_at', 'active'];
+    protected $fillable = ['user_id', 'name', 'platform', 'push_token', 'notification_sound_mode', 'notification_channels', 'last_seen_at', 'active'];
 
     protected function casts(): array
     {
-        return ['last_seen_at' => 'datetime', 'active' => 'boolean'];
+        return ['notification_channels' => 'array', 'last_seen_at' => 'datetime', 'active' => 'boolean'];
     }
 }

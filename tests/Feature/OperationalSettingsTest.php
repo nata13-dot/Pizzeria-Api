@@ -45,6 +45,25 @@ class OperationalSettingsTest extends TestCase
         ])->assertUnprocessable()->assertJsonValidationErrors('payments');
     }
 
+    public function test_notification_channels_are_saved_independently_for_each_device(): void
+    {
+        $this->seed();
+        $cashier = User::where('email', 'cajero@pizzeria.local')->firstOrFail();
+        Sanctum::actingAs($cashier);
+
+        $this->postJson('/api/register-device', [
+            'push_token' => 'device-one', 'name' => 'Caja uno', 'platform' => 'android-fcm',
+            'notification_sound_mode' => 'fixed', 'notification_channels' => ['orders_arrival_tone_v3_bell'],
+        ])->assertCreated();
+        $this->postJson('/api/register-device', [
+            'push_token' => 'device-two', 'name' => 'Caja dos', 'platform' => 'android-fcm',
+            'notification_sound_mode' => 'random', 'notification_channels' => ['orders_arrival_tone_v3_default', 'orders_arrival_custom_v1_custom_zedge'],
+        ])->assertCreated();
+
+        $this->assertDatabaseHas('user_devices', ['push_token' => 'device-one', 'notification_sound_mode' => 'fixed']);
+        $this->assertDatabaseHas('user_devices', ['push_token' => 'device-two', 'notification_sound_mode' => 'random']);
+    }
+
     private function variant(User $user): ProductVariant
     {
         $unit = Unit::where('symbol', 'pz')->firstOrFail();
