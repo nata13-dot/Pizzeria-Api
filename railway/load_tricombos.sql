@@ -1,6 +1,8 @@
 -- Pizzería POS · MySQL 5.7/8 · seguro para ejecutar varias veces.
 -- Familiar $325; Dúo $148; orden de 8 nuggets $100; media orden de 4 alitas $50.
 
+SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 SET @exists := (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='combo_items' AND column_name='flavor_selection_count');
 SET @ddl := IF(@exists=0,'ALTER TABLE combo_items ADD flavor_selection_count SMALLINT UNSIGNED NULL AFTER flavor_required','SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -18,7 +20,7 @@ BEGIN
  DECLARE CONTINUE HANDLER FOR NOT FOUND SET done=1;
 
  DROP TEMPORARY TABLE IF EXISTS tri_specs;
- CREATE TEMPORARY TABLE tri_specs(source_id BIGINT UNSIGNED,target_amount DECIMAL(12,4),source_amount DECIMAL(12,4),target_name VARCHAR(150),target_sku VARCHAR(100),fixed_price DECIMAL(12,2),max_flavors INT);
+ CREATE TEMPORARY TABLE tri_specs(source_id BIGINT UNSIGNED,target_amount DECIMAL(12,4),source_amount DECIMAL(12,4),target_name VARCHAR(150),target_sku VARCHAR(100),fixed_price DECIMAL(12,2),max_flavors INT) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
  START TRANSACTION;
  OPEN branches;
  branch_loop: LOOP
