@@ -6,13 +6,14 @@ use Illuminate\Database\Eloquent\Model;
 
 class ProductVariant extends Model
 {
-    protected $fillable = ['product_id', 'name', 'sku', 'price', 'max_flavors', 'allows_half_and_half', 'allows_stuffed_crust', 'active'];
+    protected $fillable = ['product_id', 'name', 'sku', 'price', 'max_flavors', 'required_flavors', 'allows_half_and_half', 'allows_stuffed_crust', 'active'];
 
     protected function casts(): array
     {
         return [
             'price' => 'decimal:2',
             'max_flavors' => 'integer',
+            'required_flavors' => 'integer',
             'allows_half_and_half' => 'boolean',
             'allows_stuffed_crust' => 'boolean',
             'active' => 'boolean',

@@ -27,6 +27,9 @@ class RecipeResolver
         if (count($flavorIds) > $maxFlavors) {
             throw ValidationException::withMessages(['flavors' => 'Se excedió el máximo de sabores.']);
         }
+        if ($variant->required_flavors !== null && count($flavorIds) !== $variant->required_flavors) {
+            throw ValidationException::withMessages(['flavors' => "Debes elegir exactamente {$variant->required_flavors} sabor(es)."]);
+        }
         if ($flavorIds && ProductFlavor::query()
             ->whereIn('id', $flavorIds)
             ->where('product_id', $variant->product_id)

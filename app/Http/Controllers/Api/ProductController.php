@@ -102,6 +102,7 @@ class ProductController extends Controller
             'variants.*.sku' => ['nullable', 'string', 'max:100', Rule::unique('product_variants', 'sku')],
             'variants.*.price' => ['required', 'numeric', 'min:0', 'max:9999999999.99'],
             'variants.*.max_flavors' => ['sometimes', 'integer', 'min:1', 'max:8'],
+            'variants.*.required_flavors' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:8'],
             'variants.*.allows_half_and_half' => ['sometimes', 'boolean'],
             'variants.*.allows_stuffed_crust' => ['sometimes', 'boolean'],
             'variants.*.active' => ['sometimes', 'boolean'],
@@ -347,6 +348,7 @@ class ProductController extends Controller
             'sku' => ['sometimes', 'nullable', 'string', 'max:100', Rule::unique('product_variants', 'sku')->ignore($variant?->id)],
             'price' => [$required, 'numeric', 'min:0', 'max:9999999999.99'],
             'max_flavors' => ['sometimes', 'integer', 'min:1', 'max:8'],
+            'required_flavors' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:8'],
             'allows_half_and_half' => ['sometimes', 'boolean'],
             'allows_stuffed_crust' => ['sometimes', 'boolean'],
             'active' => ['sometimes', 'boolean'],
@@ -406,6 +408,13 @@ class ProductController extends Controller
         $half = (bool) ($data['allows_half_and_half'] ?? $current?->allows_half_and_half ?? false);
         $stuffed = (bool) ($data['allows_stuffed_crust'] ?? $current?->allows_stuffed_crust ?? false);
         $maxFlavors = (int) ($data['max_flavors'] ?? $current?->max_flavors ?? 1);
+        $requiredFlavors = $data['required_flavors'] ?? $current?->required_flavors;
+
+        if ($requiredFlavors !== null && (int) $requiredFlavors > $maxFlavors) {
+            throw ValidationException::withMessages([
+                "{$key}.required_flavors" => 'Los sabores obligatorios no pueden superar el máximo permitido.',
+            ]);
+        }
 
         if ($half && ($product->type !== 'pizza' || $maxFlavors < 2)) {
             throw ValidationException::withMessages([

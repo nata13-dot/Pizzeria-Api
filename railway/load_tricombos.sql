@@ -6,13 +6,16 @@ SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
 SET @exists := (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='combo_items' AND column_name='flavor_selection_count');
 SET @ddl := IF(@exists=0,'ALTER TABLE combo_items ADD flavor_selection_count SMALLINT UNSIGNED NULL AFTER flavor_required','SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @exists := (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='product_variants' AND column_name='required_flavors');
+SET @ddl := IF(@exists=0,'ALTER TABLE product_variants ADD required_flavors SMALLINT UNSIGNED NULL AFTER max_flavors','SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 DELIMITER $$
 DROP PROCEDURE IF EXISTS load_tricombos$$
 CREATE PROCEDURE load_tricombos()
 BEGIN
  DECLARE done INT DEFAULT 0;
- DECLARE bid,wprod,nprod,fprod,wsrc,nsrc,fsrc,w20,w4,n18,n4,f500,f150,cfam,cduo,citem BIGINT UNSIGNED;
+ DECLARE bid,wprod,nprod,fprod,wsrc,nsrc,fsrc,w20,w4,n18,n4,f500,f150,cfam,cduo,citem,tfprod,tdprod,tfvariant,tdvariant BIGINT UNSIGNED;
  DECLARE unit_piece,unit_gram,food_type,category_id,wings_ingredient,nuggets_ingredient,fries_ingredient,recipe_id BIGINT UNSIGNED;
  DECLARE wamount,namount,famount DECIMAL(12,4);
  DECLARE diagnostic_message VARCHAR(255);
@@ -106,6 +109,23 @@ BEGIN
   INSERT INTO combo_items(combo_id,product_variant_id,quantity,flavor_required,flavor_selection_count,active,created_at,updated_at) VALUES(cduo,w4,1,1,1,1,NOW(),NOW()); SET citem=LAST_INSERT_ID();
   INSERT INTO combo_allowed_options(combo_item_id,product_flavor_id,modifier_id,created_at,updated_at) SELECT citem,id,NULL,NOW(),NOW() FROM product_flavors WHERE product_id=wprod AND active=1;
   INSERT INTO combo_items(combo_id,product_variant_id,quantity,flavor_required,flavor_selection_count,active,created_at,updated_at) VALUES(cduo,n4,1,0,NULL,1,NOW(),NOW()),(cduo,f150,1,0,NULL,1,NOW(),NOW());
+
+  INSERT INTO products(branch_id,product_category_id,name,type,description,active,created_at,updated_at) VALUES(bid,category_id,'Tricombo Familiar','other','20 alitas, 18 nuggets y 500 g de papas. Incluye 2 sabores de alitas.',1,NOW(),NOW()) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id),description=VALUES(description),active=1,updated_at=NOW(); SET tfprod=LAST_INSERT_ID();
+  INSERT INTO products(branch_id,product_category_id,name,type,description,active,created_at,updated_at) VALUES(bid,category_id,'Tricombo Dúo','other','4 alitas, 4 nuggets y 150 g de papas. Incluye 1 sabor de alitas.',1,NOW(),NOW()) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id),description=VALUES(description),active=1,updated_at=NOW(); SET tdprod=LAST_INSERT_ID();
+  INSERT INTO product_variants(product_id,name,sku,price,max_flavors,required_flavors,allows_half_and_half,allows_stuffed_crust,active,created_at,updated_at) VALUES(tfprod,'Familiar',CONCAT('TRICOMBO-FAMILIAR-B',bid),325,2,2,0,0,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id),price=325,max_flavors=2,required_flavors=2,active=1,updated_at=NOW(); SET tfvariant=LAST_INSERT_ID();
+  INSERT INTO product_variants(product_id,name,sku,price,max_flavors,required_flavors,allows_half_and_half,allows_stuffed_crust,active,created_at,updated_at) VALUES(tdprod,'Dúo',CONCAT('TRICOMBO-DUO-B',bid),148,1,1,0,0,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id),price=148,max_flavors=1,required_flavors=1,active=1,updated_at=NOW(); SET tdvariant=LAST_INSERT_ID();
+  INSERT INTO product_flavors(product_id,name,active,created_at,updated_at) SELECT tfprod,wf.name,1,NOW(),NOW() FROM product_flavors wf WHERE wf.product_id=wprod AND wf.active=1 ON DUPLICATE KEY UPDATE active=1,updated_at=NOW();
+  INSERT INTO product_flavors(product_id,name,active,created_at,updated_at) SELECT tdprod,wf.name,1,NOW(),NOW() FROM product_flavors wf WHERE wf.product_id=wprod AND wf.active=1 ON DUPLICATE KEY UPDATE active=1,updated_at=NOW();
+  DELETE FROM recipes WHERE product_variant_id IN(tfvariant,tdvariant);
+  INSERT INTO recipes(product_variant_id,product_flavor_id,name,active,created_at,updated_at) SELECT tfvariant,pf.id,CONCAT('Tricombo Familiar · ',pf.name),1,NOW(),NOW() FROM product_flavors pf WHERE pf.product_id=tfprod AND pf.active=1;
+  INSERT INTO recipe_items(recipe_id,ingredient_id,quantity,component,created_at,updated_at) SELECT r.id,wings_ingredient,20,'base',NOW(),NOW() FROM recipes r WHERE r.product_variant_id=tfvariant;
+  INSERT INTO recipe_items(recipe_id,ingredient_id,quantity,component,created_at,updated_at) SELECT r.id,nuggets_ingredient,18,'base',NOW(),NOW() FROM recipes r WHERE r.product_variant_id=tfvariant;
+  INSERT INTO recipe_items(recipe_id,ingredient_id,quantity,component,created_at,updated_at) SELECT r.id,fries_ingredient,500,'base',NOW(),NOW() FROM recipes r WHERE r.product_variant_id=tfvariant;
+  INSERT INTO recipes(product_variant_id,product_flavor_id,name,active,created_at,updated_at) SELECT tdvariant,pf.id,CONCAT('Tricombo Dúo · ',pf.name),1,NOW(),NOW() FROM product_flavors pf WHERE pf.product_id=tdprod AND pf.active=1;
+  INSERT INTO recipe_items(recipe_id,ingredient_id,quantity,component,created_at,updated_at) SELECT r.id,wings_ingredient,4,'base',NOW(),NOW() FROM recipes r WHERE r.product_variant_id=tdvariant;
+  INSERT INTO recipe_items(recipe_id,ingredient_id,quantity,component,created_at,updated_at) SELECT r.id,nuggets_ingredient,4,'base',NOW(),NOW() FROM recipes r WHERE r.product_variant_id=tdvariant;
+  INSERT INTO recipe_items(recipe_id,ingredient_id,quantity,component,created_at,updated_at) SELECT r.id,fries_ingredient,150,'base',NOW(),NOW() FROM recipes r WHERE r.product_variant_id=tdvariant;
+  UPDATE combos SET active=0,updated_at=NOW() WHERE id IN(cfam,cduo);
  END LOOP;
  CLOSE branches; COMMIT; DROP TEMPORARY TABLE tri_specs;
 END$$
@@ -113,4 +133,6 @@ DELIMITER ;
 
 CALL load_tricombos();
 DROP PROCEDURE load_tricombos;
-SELECT c.name,c.price,p.name producto,pv.name variante,ci.flavor_selection_count FROM combos c JOIN combo_items ci ON ci.combo_id=c.id JOIN product_variants pv ON pv.id=ci.product_variant_id JOIN products p ON p.id=pv.product_id WHERE c.name IN('Tricombo Familiar','Tricombo Dúo') ORDER BY c.name,ci.id;
+SELECT p.name,pv.name AS variante,pv.price,pv.required_flavors,COUNT(r.id) AS recetas
+FROM products p JOIN product_variants pv ON pv.product_id=p.id LEFT JOIN recipes r ON r.product_variant_id=pv.id AND r.active=1
+WHERE p.name IN('Tricombo Familiar','Tricombo Dúo') GROUP BY p.id,p.name,pv.id,pv.name,pv.price,pv.required_flavors ORDER BY p.name;
