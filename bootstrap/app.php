@@ -19,7 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         'middleware' => ['api', 'auth:sanctum', EnsureActiveUser::class],
     ])
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->redirectGuestsTo(null);
+        $middleware->redirectGuestsTo(fn () => null);
         $middleware->alias(['permission' => RequirePermission::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
