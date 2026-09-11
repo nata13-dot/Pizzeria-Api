@@ -3,8 +3,8 @@
 namespace App\Services;
 
 use App\Models\User;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class PushService
@@ -26,10 +26,11 @@ class PushService
                     function ($device) use ($title, $body, $data): array {
                         $to = $device->push_token;
                         $sound = $this->notificationSound($device);
+
                         return compact('to', 'title', 'body', 'data') + [
-                        'sound' => $sound['file'],
-                        'channelId' => $sound['channel'],
-                        'priority' => 'high',
+                            'sound' => $sound['file'],
+                            'channelId' => $sound['channel'],
+                            'priority' => 'high',
                         ];
                     },
                 )->values()->all())->throw();
@@ -89,9 +90,13 @@ class PushService
     private function firebaseCredentials(): ?array
     {
         $raw = trim((string) config('services.firebase_service_account_json'));
-        if ($raw === '') return null;
+        if ($raw === '') {
+            return null;
+        }
         $decoded = json_decode($raw, true);
-        if (! is_array($decoded)) $decoded = json_decode((string) base64_decode($raw, true), true);
+        if (! is_array($decoded)) {
+            $decoded = json_decode((string) base64_decode($raw, true), true);
+        }
 
         return is_array($decoded) && isset($decoded['project_id'], $decoded['client_email'], $decoded['private_key']) ? $decoded : null;
     }

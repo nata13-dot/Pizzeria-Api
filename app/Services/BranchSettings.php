@@ -6,6 +6,9 @@ use App\Models\Setting;
 
 class BranchSettings
 {
+    /** @var array<int, array<string, mixed>> */
+    private array $settingsByBranch = [];
+
     private const DEFAULTS = [
         'pending_payment_minutes' => 10,
         'kitchen_lead_minutes' => 30,
@@ -25,9 +28,14 @@ class BranchSettings
 
     public function get(int $branchId, string $key): mixed
     {
-        $setting = Setting::where('branch_id', $branchId)->where('key', $key)->first();
+        if (! array_key_exists($branchId, $this->settingsByBranch)) {
+            $this->settingsByBranch[$branchId] = Setting::query()
+                ->where('branch_id', $branchId)
+                ->pluck('value', 'key')
+                ->all();
+        }
 
-        return $setting?->value ?? self::DEFAULTS[$key] ?? null;
+        return $this->settingsByBranch[$branchId][$key] ?? self::DEFAULTS[$key] ?? null;
     }
 
     public function integer(int $branchId, string $key): int
@@ -38,6 +46,16 @@ class BranchSettings
     public function defaults(): array
     {
         return self::DEFAULTS;
+    }
+
+    public function forget(int $branchId): void
+    {
+        unset($this->settingsByBranch[$branchId]);
+    }
+
+    public function flush(): void
+    {
+        $this->settingsByBranch = [];
     }
 
     public function activePaymentMethods(int $branchId): array

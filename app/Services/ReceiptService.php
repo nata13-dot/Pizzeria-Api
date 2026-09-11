@@ -35,10 +35,24 @@ class ReceiptService
             default => $this->customerHtml($order, $profile, $user->receipt_font_size ?? 'small'),
         };
 
+        $contentHash = hash('sha256', $content);
+        $equivalentQuery = OrderDocument::query()
+            ->where('order_id', $order->id)
+            ->where('type', $type);
+        $equivalent = str_starts_with($type, 'customer_')
+            ? $equivalentQuery->where('path', 'like', "%-{$contentHash}.%")->latest('id')->first()
+            : $equivalentQuery->where('content', $content)->latest('id')->first();
+        if ($equivalent?->path && ! Storage::disk('local')->exists($equivalent->path)) {
+            $equivalent = null;
+        }
+        if ($equivalent) {
+            return $equivalent;
+        }
+
         $path = null;
         if (str_starts_with($type, 'customer_')) {
             $directory = 'receipts/'.$order->order_date->format('Y-m-d');
-            $base = $directory.'/order-'.$order->id.'-'.Str::uuid();
+            $base = $directory.'/order-'.$order->id.'-'.$contentHash;
             [$path, $contents] = match ($type) {
                 'customer_html' => [$base.'.html', $content],
                 'customer_pdf' => [$base.'.pdf', $this->pdf($content, $order)],
@@ -343,7 +357,9 @@ class ReceiptService
         $logo = $common['showBusinessDetails'] ? $this->logoImage($common['logoDataUrl']) : null;
         $logoHeight = $logo ? 105 : 0;
         $width = 720;
-        $lineHeight = match ($common['receiptFontSize']) { 'large' => 30, 'medium' => 26, default => 22 };
+        $lineHeight = match ($common['receiptFontSize']) {
+            'large' => 30, 'medium' => 26, default => 22
+        };
         $height = max(480, 45 + $logoHeight + $wrapped->count() * $lineHeight);
         $image = imagecreatetruecolor($width, $height);
         if ($image === false) {
@@ -367,7 +383,9 @@ class ReceiptService
             $y += $logoHeight;
         }
         foreach ($wrapped as $index => $line) {
-            $normalFont = match ($common['receiptFontSize']) { 'large' => 5, 'medium' => 4, default => 3 };
+            $normalFont = match ($common['receiptFontSize']) {
+                'large' => 5, 'medium' => 4, default => 3
+            };
             $font = $index === 0 || str_starts_with($line, 'ORDEN #') || str_starts_with($line, 'TOTAL:') ? min(5, $normalFont + 1) : $normalFont;
             $color = str_starts_with($line, 'TOTAL:') ? $brand : $dark;
             imagestring($image, $font, 28, $y + $index * $lineHeight, $line, $color);

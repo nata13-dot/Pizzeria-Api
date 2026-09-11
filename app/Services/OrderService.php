@@ -10,7 +10,6 @@ use App\Models\Ingredient;
 use App\Models\InventoryAdjustment;
 use App\Models\InventoryMovement;
 use App\Models\Order;
-use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
 use App\Models\User;
 use App\Notifications\SystemAlertNotification;
@@ -43,11 +42,11 @@ class OrderService
                 }
             }
             $date = CarbonImmutable::now($branch->timezone ?: config('app.timezone'))->toDateString();
-            $number = (int) Order::query()
-                ->where('branch_id', $branch->id)
-                ->whereDate('order_date', $date)
-                ->where('status', '!=', 'cancelled')
-                ->max('daily_number') + 1;
+            $dailyOrders = Order::query()->where('branch_id', $branch->id);
+            DB::connection()->getDriverName() === 'sqlite'
+                ? $dailyOrders->whereDate('order_date', $date)
+                : $dailyOrders->where('order_date', $date);
+            $number = (int) $dailyOrders->max('daily_number') + 1;
             $deliveryFee = $this->deliveryFee($branch->id, $data);
 
             $order = Order::create([
@@ -74,6 +73,16 @@ class OrderService
             ]);
 
             $subtotal = 0.0;
+            $variantIds = collect($data['items'])
+                ->pluck('product_variant_id')
+                ->filter()
+                ->unique()
+                ->values();
+            $variants = ProductVariant::query()
+                ->with(['product.flavors', 'recipes.items.ingredient', 'modifierRules.modifier.items.ingredient'])
+                ->whereIn('id', $variantIds)
+                ->get()
+                ->keyBy('id');
             foreach ($data['items'] as $row) {
                 if (isset($row['combo_id'])) {
                     $subtotal += $this->addCombo($order, $row);
@@ -81,14 +90,12 @@ class OrderService
                     continue;
                 }
 
-                $variant = ProductVariant::with('product')->findOrFail($row['product_variant_id']);
+                $variant = $variants->get($row['product_variant_id']);
+                abort_unless($variant, 404);
                 abort_unless($variant->product->branch_id === $branch->id, 404);
 
                 $modifierIds = array_values(array_unique($row['modifier_ids'] ?? []));
-                $modifierRules = $variant->modifierRules()
-                    ->with('modifier')
-                    ->whereIn('modifier_id', $modifierIds)
-                    ->get();
+                $modifierRules = $variant->modifierRules->whereIn('modifier_id', $modifierIds)->values();
                 if ($modifierRules->count() !== count($modifierIds)) {
                     throw ValidationException::withMessages([
                         'items' => 'Uno de los modificadores no está permitido para el producto.',
@@ -443,7 +450,12 @@ class OrderService
 
     private function addCombo(Order $order, array $row): float
     {
-        $combo = Combo::with(['items.variant.product', 'items.options'])->findOrFail($row['combo_id']);
+        $combo = Combo::with([
+            'items.variant.product.flavors',
+            'items.variant.recipes.items.ingredient',
+            'items.variant.modifierRules.modifier.items.ingredient',
+            'items.options',
+        ])->findOrFail($row['combo_id']);
         abort_unless($combo->branch_id === $order->branch_id && $combo->active, 422);
         $selectionRows = collect($row['components'] ?? []);
         if ($selectionRows->map(fn ($selection) => ($selection['combo_item_id'] ?? '').':'.($selection['unit_index'] ?? 'all'))->unique()->count() !== $selectionRows->count()
@@ -503,10 +515,7 @@ class OrderService
                         + $ingredient['quantity'] * $selectionQuantity * $row['quantity'];
                 }
 
-                $modifierRules = $component->variant->modifierRules()
-                    ->with('modifier')
-                    ->whereIn('modifier_id', $modifierIds)
-                    ->get();
+                $modifierRules = $component->variant->modifierRules->whereIn('modifier_id', $modifierIds)->values();
                 $modifierExtra = $modifierRules->sum(
                     fn ($rule) => (float) ($rule->price_override ?? $rule->modifier->price),
                 );
@@ -517,7 +526,7 @@ class OrderService
                     'product_variant_id' => $component->variant->id,
                     'name' => trim($component->variant->product->name.' '.$component->variant->name),
                     'quantity' => $selectionQuantity * (float) $row['quantity'],
-                    'flavors' => ProductFlavor::query()->whereIn('id', $flavors)->pluck('name')->all(),
+                    'flavors' => $component->variant->product->flavors->whereIn('id', $flavors)->pluck('name')->all(),
                     'modifiers' => $modifierRules->map(fn ($rule) => [
                         'id' => $rule->modifier_id,
                         'name' => $rule->modifier->name,

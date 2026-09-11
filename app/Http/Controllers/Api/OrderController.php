@@ -25,7 +25,9 @@ class OrderController extends Controller
         return Order::with(['customer', 'items.flavors.flavor', 'items.modifiers', 'items.components', 'payments', 'delivery'])
             ->where('branch_id', $r->user()->branch_id)
             ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
-            ->when($filters['date'] ?? null, fn ($query, $date) => $query->whereDate('order_date', $date))
+            ->when($filters['date'] ?? null, fn ($query, $date) => DB::connection()->getDriverName() === 'sqlite'
+                ? $query->whereDate('order_date', $date)
+                : $query->where('order_date', $date))
             ->when(array_key_exists('scheduled', $filters), fn ($query) => $filters['scheduled'] ? $query->whereNotNull('scheduled_at') : $query->whereNull('scheduled_at'))
             ->when($filters['search'] ?? null, fn ($query, $search) => $query->where(fn ($nested) => $nested
                 ->where('daily_number', $search)
@@ -136,7 +138,31 @@ class OrderController extends Controller
 
     public function kitchenOrders(Request $r, BranchSettings $settings)
     {
-        $orders = Order::with(['customer', 'delivery', 'items.flavors.flavor', 'items.modifiers', 'items.components', 'histories'])
+        $showPrices = (bool) $settings->get($r->user()->branch_id, 'show_kitchen_prices');
+        $orderColumns = ['id', 'branch_id', 'daily_number', 'status', 'type', 'scheduled_at', 'notes', 'created_at'];
+        $itemColumns = ['id', 'order_id', 'name', 'quantity', 'notes'];
+        $modifierColumns = ['id', 'order_item_id', 'modifier_id', 'name'];
+        if ($showPrices) {
+            array_push($orderColumns, 'subtotal', 'discount', 'delivery_fee', 'total', 'courtesy');
+            array_push($itemColumns, 'unit_price', 'total');
+            $modifierColumns[] = 'price';
+        }
+
+        $orders = Order::query()
+            ->select($orderColumns)
+            ->with([
+                'customer:id,name',
+                'delivery:id,order_id,recipient',
+                'items' => fn ($query) => $query->select($itemColumns),
+                'items.flavors:id,order_item_id,product_flavor_id,ratio',
+                'items.flavors.flavor:id,name',
+                'items.modifiers' => fn ($query) => $query->select($modifierColumns),
+                'items.components:id,order_item_id,name,quantity,flavors,modifiers,notes',
+                'histories' => fn ($query) => $query
+                    ->select(['id', 'order_id', 'to_status', 'created_at'])
+                    ->whereIn('to_status', ['kitchen_pending', 'preparing', 'prepared'])
+                    ->orderBy('created_at'),
+            ])
             ->where('branch_id', $r->user()->branch_id)
             ->whereIn('status', ['kitchen_pending', 'preparing', 'prepared'])
             ->orderByRaw('scheduled_at IS NULL')
@@ -144,12 +170,9 @@ class OrderController extends Controller
             ->orderBy('created_at')
             ->get();
 
-        if (! $settings->get($r->user()->branch_id, 'show_kitchen_prices')) {
+        if (! $showPrices) {
             $orders->each(function (Order $order): void {
-                $order->makeHidden(['subtotal', 'discount', 'delivery_fee', 'total', 'courtesy']);
                 $order->items->each(function ($item): void {
-                    $item->makeHidden(['unit_price', 'total']);
-                    $item->modifiers->each->makeHidden('price');
                     $item->components->each(function ($component): void {
                         $component->modifiers = collect($component->modifiers)
                             ->map(fn ($modifier) => collect($modifier)->except('price')->all())

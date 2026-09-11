@@ -144,6 +144,7 @@ class AdministrationController extends Controller
                 Setting::updateOrCreate(['branch_id' => $r->user()->branch_id, 'key' => $k], ['value' => $v]);
             }
         });
+        app(BranchSettings::class)->forget((int) $r->user()->branch_id);
 
         return $this->settings($r, app(BranchSettings::class));
     }

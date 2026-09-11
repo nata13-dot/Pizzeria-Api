@@ -62,6 +62,11 @@ class Order extends Model
         return $this->hasMany(OrderStatusHistory::class);
     }
 
+    public function documents()
+    {
+        return $this->hasMany(OrderDocument::class);
+    }
+
     public function reservations()
     {
         return $this->hasMany(StockReservation::class);

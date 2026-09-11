@@ -391,6 +391,80 @@ class ReportFlowTest extends TestCase
             ->assertJsonPath('average_fulfillment_minutes', 65);
     }
 
+    public function test_time_report_having_is_equivalent_to_completed_history_exists(): void
+    {
+        $prepared = $this->order(['daily_number' => 10, 'status' => 'prepared']);
+        $this->history($prepared, [
+            'kitchen_pending' => '09:00:00',
+            'prepared' => '09:20:00',
+        ]);
+
+        $delivered = $this->order(['daily_number' => 11, 'status' => 'delivered']);
+        $this->history($delivered, [
+            'confirmed' => '10:00:00',
+            'delivered' => '10:45:00',
+        ]);
+
+        $withoutCompletedTransition = $this->order(['daily_number' => 12, 'status' => 'confirmed']);
+        $this->history($withoutCompletedTransition, [
+            'confirmed' => '11:00:00',
+            'preparing' => '11:05:00',
+        ]);
+
+        $cancelled = $this->order(['daily_number' => 13, 'status' => 'cancelled']);
+        $this->history($cancelled, [
+            'prepared' => '12:00:00',
+            'delivered' => '12:30:00',
+        ]);
+
+        $repeated = $this->order(['daily_number' => 14, 'status' => 'prepared']);
+        $this->history($repeated, ['kitchen_pending' => '13:00:00']);
+        foreach (['13:10:00', '13:25:00'] as $time) {
+            $createdAt = CarbonImmutable::parse("{$this->date} {$time}", $this->admin->branch->timezone)->utc();
+            DB::table('order_status_histories')->insert([
+                'order_id' => $repeated->id,
+                'user_id' => $repeated->user_id,
+                'to_status' => 'prepared',
+                'created_at' => $createdAt,
+                'updated_at' => $createdAt,
+            ]);
+        }
+
+        $legacyIds = Order::query()
+            ->where('branch_id', $this->admin->branch_id)
+            ->whereNotIn('status', ['draft', 'pending_payment', 'cancelled'])
+            ->whereHas('histories', fn ($query) => $query->whereIn('to_status', ['prepared', 'delivered']))
+            ->pluck('id')
+            ->sort()
+            ->values()
+            ->all();
+        $havingIds = Order::query()
+            ->leftJoin('order_status_histories AS test_histories', 'test_histories.order_id', '=', 'orders.id')
+            ->where('orders.branch_id', $this->admin->branch_id)
+            ->whereNotIn('orders.status', ['draft', 'pending_payment', 'cancelled'])
+            ->select('orders.id')
+            ->groupBy('orders.id')
+            ->havingRaw("MIN(CASE WHEN test_histories.to_status IN ('prepared', 'delivered') THEN 1 END) IS NOT NULL")
+            ->pluck('orders.id')
+            ->sort()
+            ->values()
+            ->all();
+
+        $this->assertSame($legacyIds, $havingIds);
+        $this->assertSame([$prepared->id, $delivered->id, $repeated->id], $havingIds);
+
+        $response = $this->getJson("/api/reports/times?from={$this->date}&to={$this->date}")
+            ->assertOk()
+            ->assertJsonCount(3, 'orders');
+        $rows = collect($response->json('orders'))->keyBy('order_id');
+
+        $this->assertTrue($rows->has($prepared->id));
+        $this->assertTrue($rows->has($delivered->id));
+        $this->assertFalse($rows->has($withoutCompletedTransition->id));
+        $this->assertFalse($rows->has($cancelled->id));
+        $this->assertSame(10, $rows->get($repeated->id)['kitchen_minutes']);
+    }
+
     public function test_cash_report_classifies_mixed_sales_and_excludes_cancelled_and_other_branches(): void
     {
         $cash = $this->order(['daily_number' => 1, 'subtotal' => 100, 'total' => 100]);

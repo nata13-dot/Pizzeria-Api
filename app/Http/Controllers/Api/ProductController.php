@@ -28,6 +28,30 @@ class ProductController extends Controller
             ->get();
     }
 
+    public function posCatalog(Request $request)
+    {
+        return Product::query()
+            ->select(['id', 'branch_id', 'product_category_id', 'name', 'type', 'description', 'image_data_uri', 'active'])
+            ->where('branch_id', $request->user()->branch_id)
+            ->where('active', true)
+            ->with([
+                'category:id,name',
+                'flavors' => fn (Relation $query) => $query
+                    ->select(['id', 'product_id', 'name', 'active'])
+                    ->where('active', true),
+                'variants' => fn (Relation $query) => $query
+                    ->select(['id', 'product_id', 'name', 'price', 'max_flavors', 'required_flavors', 'allows_half_and_half', 'allows_stuffed_crust', 'active'])
+                    ->where('active', true),
+                'variants.modifierRules' => fn (Relation $query) => $query
+                    ->select(['id', 'product_variant_id', 'modifier_id', 'allowed', 'price_override'])
+                    ->where('allowed', true)
+                    ->whereHas('modifier', fn ($modifier) => $modifier->where('active', true)),
+                'variants.modifierRules.modifier:id,name,type,price,active',
+            ])
+            ->orderBy('name')
+            ->get();
+    }
+
     public function show(Request $request, Product $product)
     {
         $this->ownProduct($request, $product);

@@ -16,6 +16,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
@@ -34,6 +35,7 @@ class ReportController extends Controller
             'product_id' => 'nullable|integer',
             'category_id' => 'nullable|integer',
         ]);
+        $filters = $this->boundedFilters($request, $filters);
         $base = $this->orderQuery($request, $filters);
         $accounted = (clone $base)->whereNotIn('status', self::NON_ACCOUNTED_STATUSES);
         $cancelled = (clone $base)->where('status', 'cancelled');
@@ -141,23 +143,62 @@ class ReportController extends Controller
             'payment_method' => 'nullable|in:cash,transfer,mixed,courtesy',
             'group_by' => 'nullable|in:product,category',
         ]);
+        $filters = $this->boundedFilters($request, $filters);
         $branchId = (int) $request->user()->branch_id;
         $orders = $this->orderQuery($request, $filters)
             ->whereNotIn('status', self::NON_ACCOUNTED_STATUSES);
-        $items = OrderItem::query()
-            ->with(['order', 'variant.product.category'])
-            ->whereHas('order', fn (Builder $query) => $query->whereIn('id', (clone $orders)->select('id')))
-            ->when($filters['product_id'] ?? null, fn (Builder $query, $id) => $query->whereHas(
-                'variant.product',
-                fn (Builder $products) => $products->where('branch_id', $branchId)->whereKey($id),
-            ))
-            ->when($filters['category_id'] ?? null, fn (Builder $query, $id) => $query->whereHas(
-                'variant.product',
-                fn (Builder $products) => $products->where('branch_id', $branchId)->where('product_category_id', $id),
-            ))
+        $byCategory = ($filters['group_by'] ?? 'product') === 'category';
+        $groupColumns = $byCategory
+            ? [
+                DB::raw("CASE WHEN order_items.combo_id IS NOT NULL THEN 'Paquetes' ELSE COALESCE(product_categories.name, 'Sin categoría') END"),
+                DB::raw('CASE WHEN order_items.combo_id IS NOT NULL THEN NULL ELSE product_categories.id END'),
+            ]
+            : ['order_items.combo_id', 'order_items.product_variant_id', 'order_items.name', 'products.id', 'product_categories.id', 'product_categories.name'];
+        $discount = 'CASE WHEN orders.subtotal > 0 THEN (CASE WHEN orders.discount < 0 THEN 0 WHEN orders.discount > orders.subtotal THEN orders.subtotal ELSE orders.discount END) * (order_items.total / orders.subtotal) ELSE 0 END';
+        $net = "CASE WHEN order_items.total - ({$discount}) > 0 THEN order_items.total - ({$discount}) ELSE 0 END";
+
+        $rows = DB::table('order_items')
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->leftJoin('product_variants', 'product_variants.id', '=', 'order_items.product_variant_id')
+            ->leftJoin('products', function ($join) use ($branchId): void {
+                $join->on('products.id', '=', 'product_variants.product_id')->where('products.branch_id', $branchId);
+            })
+            ->leftJoin('product_categories', 'product_categories.id', '=', 'products.product_category_id')
+            ->whereIn('orders.id', (clone $orders)->select('id'))
+            ->when($filters['product_id'] ?? null, fn ($query, $id) => $query->where('products.id', $id))
+            ->when($filters['category_id'] ?? null, fn ($query, $id) => $query->where('products.product_category_id', $id))
+            ->selectRaw($byCategory
+                ? "CASE WHEN order_items.combo_id IS NOT NULL THEN 'Paquetes' ELSE COALESCE(product_categories.name, 'Sin categoría') END AS name,
+                   CASE WHEN order_items.combo_id IS NOT NULL THEN NULL ELSE product_categories.id END AS category_id,
+                   CASE WHEN order_items.combo_id IS NOT NULL THEN 'Paquetes' ELSE COALESCE(product_categories.name, 'Sin categoría') END AS category"
+                : "order_items.name AS product, order_items.name, products.id AS product_id,
+                   CASE WHEN products.id IS NULL THEN NULL ELSE order_items.product_variant_id END AS variant_id,
+                   order_items.combo_id, product_categories.id AS category_id,
+                   CASE WHEN order_items.combo_id IS NOT NULL THEN 'Paquetes' ELSE COALESCE(product_categories.name, 'Sin categoría') END AS category")
+            ->selectRaw('SUM(order_items.quantity) AS quantity')
+            ->selectRaw('SUM(CASE WHEN orders.courtesy = 0 THEN order_items.quantity ELSE 0 END) AS paid_quantity')
+            ->selectRaw('SUM(CASE WHEN orders.courtesy = 1 THEN order_items.quantity ELSE 0 END) AS courtesy_quantity')
+            ->selectRaw('SUM(CASE WHEN orders.courtesy = 0 THEN order_items.total ELSE 0 END) AS gross_sales')
+            ->selectRaw("SUM(CASE WHEN orders.courtesy = 0 THEN {$discount} ELSE 0 END) AS discounts")
+            ->selectRaw("SUM(CASE WHEN orders.courtesy = 0 THEN {$net} ELSE 0 END) AS sales")
+            ->selectRaw("SUM(CASE WHEN orders.courtesy = 1 THEN {$net} ELSE 0 END) AS courtesy_total")
+            ->groupBy($groupColumns)
+            ->orderByDesc('quantity')
             ->get();
 
-        return $this->productRows($items, $branchId, ($filters['group_by'] ?? 'product') === 'category');
+        return $rows->map(function ($row): array {
+            $result = (array) $row;
+            foreach (['quantity', 'paid_quantity', 'courtesy_quantity', 'gross_sales', 'discounts', 'sales', 'courtesy_total'] as $field) {
+                $result[$field] = round((float) $result[$field], 2);
+            }
+            foreach (['product_id', 'variant_id', 'combo_id', 'category_id'] as $field) {
+                if (array_key_exists($field, $result)) {
+                    $result[$field] = $result[$field] === null ? null : (int) $result[$field];
+                }
+            }
+
+            return $result;
+        });
     }
 
     public function inventory(Request $request)
@@ -167,6 +208,7 @@ class ReportController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'ingredient_id' => 'nullable|integer',
         ]);
+        $filters = $this->boundedFilters($request, $filters);
         $branchId = (int) $request->user()->branch_id;
         $timezone = $this->timezone($request);
         $today = CarbonImmutable::now($timezone)->startOfDay();
@@ -181,25 +223,28 @@ class ReportController extends Controller
             ->whereIn('ingredient_id', $ingredientIds)
             ->get();
         $batchesByIngredient = $batches->groupBy('ingredient_id');
-        $batchesById = $batches->keyBy('id');
-
         $movements = InventoryMovement::query()
-            ->where('branch_id', $branchId)
-            ->whereIn('ingredient_id', $ingredientIds)
-            ->whereIn('type', ['sale', 'production_input', 'return']);
-        $this->timestampRange($movements, $filters, 'created_at', $timezone);
-        $consumption = $movements->get()
-            ->groupBy('ingredient_id')
-            ->map(function (Collection $rows, int $ingredientId) use ($ingredients, $batchesById): array {
+            ->where('inventory_movements.branch_id', $branchId)
+            ->whereIn('inventory_movements.ingredient_id', $ingredientIds)
+            ->whereIn('inventory_movements.type', ['sale', 'production_input', 'return'])
+            ->leftJoin('inventory_batches', 'inventory_batches.id', '=', 'inventory_movements.inventory_batch_id');
+        $this->timestampRange($movements, $filters, 'inventory_movements.created_at', $timezone);
+        $consumption = $movements
+            ->select('inventory_movements.ingredient_id')
+            ->selectRaw("SUM(CASE WHEN inventory_movements.type IN ('sale', 'return') THEN inventory_movements.quantity ELSE 0 END) AS sale_net")
+            ->selectRaw("SUM(CASE WHEN inventory_movements.type = 'production_input' THEN inventory_movements.quantity ELSE 0 END) AS production_net")
+            ->selectRaw("SUM(CASE WHEN inventory_movements.type = 'return' THEN inventory_movements.quantity ELSE 0 END) AS returned_quantity")
+            ->selectRaw("SUM(CASE WHEN inventory_movements.type IN ('sale', 'return') THEN inventory_movements.quantity * COALESCE(inventory_batches.unit_cost, 0) ELSE 0 END) AS sale_cost_net")
+            ->selectRaw("SUM(CASE WHEN inventory_movements.type = 'production_input' THEN inventory_movements.quantity * COALESCE(inventory_batches.unit_cost, 0) ELSE 0 END) AS production_cost_net")
+            ->groupBy('inventory_movements.ingredient_id')
+            ->get()
+            ->map(function ($row) use ($ingredients): array {
+                $ingredientId = (int) $row->ingredient_id;
                 $ingredient = $ingredients->firstWhere('id', $ingredientId);
-                $saleQuantity = max(0, -(float) $rows->whereIn('type', ['sale', 'return'])->sum('quantity'));
-                $productionQuantity = max(0, -(float) $rows->where('type', 'production_input')->sum('quantity'));
-                $saleCost = max(0, -(float) $rows->whereIn('type', ['sale', 'return'])->sum(
-                    fn (InventoryMovement $movement) => (float) $movement->quantity * (float) ($batchesById->get($movement->inventory_batch_id)?->unit_cost ?? 0),
-                ));
-                $productionCost = max(0, -(float) $rows->where('type', 'production_input')->sum(
-                    fn (InventoryMovement $movement) => (float) $movement->quantity * (float) ($batchesById->get($movement->inventory_batch_id)?->unit_cost ?? 0),
-                ));
+                $saleQuantity = max(0, -(float) $row->sale_net);
+                $productionQuantity = max(0, -(float) $row->production_net);
+                $saleCost = max(0, -(float) $row->sale_cost_net);
+                $productionCost = max(0, -(float) $row->production_cost_net);
 
                 return [
                     'ingredient_id' => $ingredientId,
@@ -207,7 +252,7 @@ class ReportController extends Controller
                     'unit' => $ingredient?->baseUnit?->symbol,
                     'sale_quantity' => round($saleQuantity, 4),
                     'production_quantity' => round($productionQuantity, 4),
-                    'returned_quantity' => round(max(0, (float) $rows->where('type', 'return')->sum('quantity')), 4),
+                    'returned_quantity' => round(max(0, (float) $row->returned_quantity), 4),
                     'total_quantity' => round($saleQuantity + $productionQuantity, 4),
                     'estimated_cost' => round($saleCost + $productionCost, 2),
                 ];
@@ -216,31 +261,47 @@ class ReportController extends Controller
             ->values();
 
         $adjustments = InventoryAdjustment::query()
-            ->where('branch_id', $branchId)
-            ->whereIn('ingredient_id', $ingredientIds)
-            ->whereIn('reason', self::WASTE_REASONS);
-        $this->timestampRange($adjustments, $filters, 'created_at', $timezone);
-        $adjustmentRows = $adjustments->get();
-        $wasteTotal = (float) $adjustmentRows->sum(fn (InventoryAdjustment $adjustment) => abs((float) $adjustment->quantity));
-        $wasteByReason = $adjustmentRows
-            ->groupBy('reason')
-            ->map(fn (Collection $rows, string $reason): array => [
-                'reason' => $reason,
-                'quantity' => round((float) $rows->sum(fn (InventoryAdjustment $adjustment) => abs((float) $adjustment->quantity)), 4),
-                'estimated_cost' => round((float) $rows->sum(fn (InventoryAdjustment $adjustment) => abs((float) $adjustment->quantity) * (float) ($batchesById->get($adjustment->inventory_batch_id)?->unit_cost ?? 0)), 2),
-            ])
-            ->values();
-        $wasteByIngredient = $adjustmentRows
-            ->groupBy('ingredient_id')
-            ->map(function (Collection $rows, int $ingredientId) use ($ingredients, $batchesById): array {
+            ->where('inventory_adjustments.branch_id', $branchId)
+            ->whereIn('inventory_adjustments.ingredient_id', $ingredientIds)
+            ->whereIn('inventory_adjustments.reason', self::WASTE_REASONS)
+            ->leftJoin('inventory_batches', 'inventory_batches.id', '=', 'inventory_adjustments.inventory_batch_id');
+        $this->timestampRange($adjustments, $filters, 'inventory_adjustments.created_at', $timezone);
+        $wasteByReason = (clone $adjustments)
+            ->select('inventory_adjustments.reason')
+            ->selectRaw('COUNT(*) AS adjustments_count')
+            ->selectRaw('SUM(ABS(inventory_adjustments.quantity)) AS quantity')
+            ->selectRaw('SUM(ABS(inventory_adjustments.quantity) * COALESCE(inventory_batches.unit_cost, 0)) AS estimated_cost')
+            ->groupBy('inventory_adjustments.reason')
+            ->get()
+            ->map(fn ($row): array => [
+                'reason' => $row->reason,
+                'quantity' => round((float) $row->quantity, 4),
+                'estimated_cost' => round((float) $row->estimated_cost, 2),
+                '_count' => (int) $row->adjustments_count,
+            ]);
+        $wasteTotal = (float) $wasteByReason->sum('quantity');
+        $wasteAdjustmentCount = (int) $wasteByReason->sum('_count');
+        $wasteByReason = $wasteByReason->map(function (array $row): array {
+            unset($row['_count']);
+
+            return $row;
+        })->values();
+        $wasteByIngredient = (clone $adjustments)
+            ->select('inventory_adjustments.ingredient_id')
+            ->selectRaw('SUM(ABS(inventory_adjustments.quantity)) AS quantity')
+            ->selectRaw('SUM(ABS(inventory_adjustments.quantity) * COALESCE(inventory_batches.unit_cost, 0)) AS estimated_cost')
+            ->groupBy('inventory_adjustments.ingredient_id')
+            ->get()
+            ->map(function ($row) use ($ingredients): array {
+                $ingredientId = (int) $row->ingredient_id;
                 $ingredient = $ingredients->firstWhere('id', $ingredientId);
 
                 return [
                     'ingredient_id' => $ingredientId,
                     'name' => $ingredient?->name,
                     'unit' => $ingredient?->baseUnit?->symbol,
-                    'quantity' => round((float) $rows->sum(fn (InventoryAdjustment $adjustment) => abs((float) $adjustment->quantity)), 4),
-                    'estimated_cost' => round((float) $rows->sum(fn (InventoryAdjustment $adjustment) => abs((float) $adjustment->quantity) * (float) ($batchesById->get($adjustment->inventory_batch_id)?->unit_cost ?? 0)), 2),
+                    'quantity' => round((float) $row->quantity, 4),
+                    'estimated_cost' => round((float) $row->estimated_cost, 2),
                 ];
             })
             ->sortByDesc('quantity')
@@ -305,7 +366,7 @@ class ReportController extends Controller
                 'expiring_batches' => $expiringBatches->count(),
                 'expired_batches' => $expiredBatches->count(),
                 'consumed_ingredients' => $consumption->where('total_quantity', '>', 0)->count(),
-                'waste_adjustments' => $adjustmentRows->count(),
+                'waste_adjustments' => $wasteAdjustmentCount,
                 'waste_ingredients' => $wasteByIngredient->count(),
                 'consumed_quantity' => round((float) $consumption->sum('total_quantity'), 4),
                 'waste_quantity' => round($wasteTotal, 4),
@@ -331,6 +392,7 @@ class ReportController extends Controller
             'payment_source' => 'nullable|in:cash,owner,bank,credit,other',
             'include_summary' => 'nullable|boolean',
         ]);
+        $filters = $this->boundedFilters($request, $filters);
         $branchId = (int) $request->user()->branch_id;
         $query = Purchase::with([
             'supplier' => fn ($supplier) => $supplier->where('branch_id', $branchId),
@@ -384,6 +446,7 @@ class ReportController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'customer_id' => 'nullable|integer',
         ]);
+        $filters = $this->boundedFilters($request, $filters);
         $branchId = (int) $request->user()->branch_id;
         $timezone = $this->timezone($request);
         $accountedOrders = function (Builder $query) use ($branchId, $filters): void {
@@ -481,6 +544,7 @@ class ReportController extends Controller
             'customer_id' => 'nullable|integer',
             'type' => 'nullable|in:pickup,whatsapp,delivery,dine_in',
         ]);
+        $filters = $this->boundedFilters($request, $filters);
         $branchId = (int) $request->user()->branch_id;
         $orders = $this->orderQuery($request, $filters)
             ->whereNotIn('status', self::NON_ACCOUNTED_STATUSES);
@@ -501,15 +565,11 @@ class ReportController extends Controller
             ->where('branch_id', $branchId)
             ->whereIn('ingredient_id', $ingredientIds)
             ->where('initial_quantity', '>', 0)
-            ->get()
+            ->select('ingredient_id')
+            ->selectRaw('SUM(initial_quantity * unit_cost) / SUM(initial_quantity) AS weighted_cost')
             ->groupBy('ingredient_id')
-            ->map(function (Collection $batches): float {
-                $units = (float) $batches->sum('initial_quantity');
-
-                return $units > 0
-                    ? (float) $batches->sum(fn (InventoryBatch $batch) => (float) $batch->initial_quantity * (float) $batch->unit_cost) / $units
-                    : 0.0;
-            });
+            ->get()
+            ->mapWithKeys(fn (InventoryBatch $batch) => [$batch->ingredient_id => (float) $batch->weighted_cost]);
 
         $rows = [];
         foreach ($items as $item) {
@@ -577,31 +637,45 @@ class ReportController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'type' => 'nullable|in:pickup,whatsapp,delivery,dine_in',
         ]);
-        $orders = Order::with(['histories' => fn ($query) => $query->orderBy('created_at')->orderBy('id')])
-            ->where('branch_id', $request->user()->branch_id)
-            ->whereNotIn('status', self::NON_ACCOUNTED_STATUSES)
-            ->when($filters['type'] ?? null, fn (Builder $query, $type) => $query->where('type', $type))
-            ->whereHas('histories', fn (Builder $query) => $query->whereIn('to_status', ['prepared', 'delivered']));
-        $this->dateRange($orders, $filters, 'order_date');
-        $values = $orders->get()->map(function (Order $order): array {
-            $at = fn (string $status) => $order->histories->firstWhere('to_status', $status)?->created_at;
+        $filters = $this->boundedFilters($request, $filters);
+        $orders = Order::query()
+            ->leftJoin('order_status_histories AS report_histories', 'report_histories.order_id', '=', 'orders.id')
+            ->where('orders.branch_id', $request->user()->branch_id)
+            ->whereNotIn('orders.status', self::NON_ACCOUNTED_STATUSES)
+            ->when($filters['type'] ?? null, fn (Builder $query, $type) => $query->where('orders.type', $type));
+        $this->dateRange($orders, $filters, 'orders.order_date');
+        $values = $orders
+            ->select(['orders.id', 'orders.daily_number', 'orders.order_date', 'orders.type', 'orders.scheduled_at'])
+            ->selectRaw("MIN(CASE WHEN report_histories.to_status = 'confirmed' THEN report_histories.created_at END) AS confirmed_at")
+            ->selectRaw("MIN(CASE WHEN report_histories.to_status = 'kitchen_pending' THEN report_histories.created_at END) AS kitchen_pending_at")
+            ->selectRaw("MIN(CASE WHEN report_histories.to_status = 'preparing' THEN report_histories.created_at END) AS preparing_at")
+            ->selectRaw("MIN(CASE WHEN report_histories.to_status = 'prepared' THEN report_histories.created_at END) AS prepared_at")
+            ->selectRaw("MIN(CASE WHEN report_histories.to_status = 'on_way' THEN report_histories.created_at END) AS on_way_at")
+            ->selectRaw("MIN(CASE WHEN report_histories.to_status = 'delivered' THEN report_histories.created_at END) AS delivered_at")
+            ->groupBy(['orders.id', 'orders.daily_number', 'orders.order_date', 'orders.type', 'orders.scheduled_at'])
+            ->havingRaw("MIN(CASE WHEN report_histories.to_status IN ('prepared', 'delivered') THEN 1 END) IS NOT NULL")
+            ->get()
+            ->map(function (Order $order): array {
+                $at = fn (string $status) => $order->getAttribute("{$status}_at")
+                    ? CarbonImmutable::parse($order->getAttribute("{$status}_at"))
+                    : null;
 
-            return [
-                'order_id' => $order->id,
-                'daily_number' => $order->daily_number,
-                'order_date' => $order->order_date->toDateString(),
-                'type' => $order->type,
-                'scheduled_at' => $order->scheduled_at?->toISOString(),
-                'queue_minutes' => $this->minutesBetween($at('kitchen_pending'), $at('preparing')),
-                'preparation_minutes' => $this->minutesBetween($at('preparing'), $at('prepared')),
-                'kitchen_minutes' => $this->minutesBetween($at('kitchen_pending'), $at('prepared')),
-                'delivery_minutes' => $this->minutesBetween($at('on_way'), $at('delivered')),
-                'fulfillment_minutes' => $this->minutesBetween($at('confirmed'), $at('delivered')),
-                'scheduled_delivery_variance_minutes' => $order->scheduled_at && $at('delivered')
-                    ? round($order->scheduled_at->diffInSeconds($at('delivered'), false) / 60, 2)
-                    : null,
-            ];
-        });
+                return [
+                    'order_id' => $order->id,
+                    'daily_number' => $order->daily_number,
+                    'order_date' => $order->order_date->toDateString(),
+                    'type' => $order->type,
+                    'scheduled_at' => $order->scheduled_at?->toISOString(),
+                    'queue_minutes' => $this->minutesBetween($at('kitchen_pending'), $at('preparing')),
+                    'preparation_minutes' => $this->minutesBetween($at('preparing'), $at('prepared')),
+                    'kitchen_minutes' => $this->minutesBetween($at('kitchen_pending'), $at('prepared')),
+                    'delivery_minutes' => $this->minutesBetween($at('on_way'), $at('delivered')),
+                    'fulfillment_minutes' => $this->minutesBetween($at('confirmed'), $at('delivered')),
+                    'scheduled_delivery_variance_minutes' => $order->scheduled_at && $at('delivered')
+                        ? round($order->scheduled_at->diffInSeconds($at('delivered'), false) / 60, 2)
+                        : null,
+                ];
+            });
 
         return [
             'orders' => $values,
@@ -743,9 +817,29 @@ class ReportController extends Controller
 
     private function dateRange(Builder $query, array $filters, string $field): void
     {
+        $sqlite = DB::connection()->getDriverName() === 'sqlite';
         $query
-            ->when($filters['from'] ?? null, fn (Builder $builder, $date) => $builder->whereDate($field, '>=', $date))
-            ->when($filters['to'] ?? null, fn (Builder $builder, $date) => $builder->whereDate($field, '<=', $date));
+            ->when($filters['from'] ?? null, fn (Builder $builder, $date) => $sqlite
+                ? $builder->whereDate($field, '>=', $date)
+                : $builder->where($field, '>=', $date))
+            ->when($filters['to'] ?? null, fn (Builder $builder, $date) => $sqlite
+                ? $builder->whereDate($field, '<=', $date)
+                : $builder->where($field, '<=', $date));
+    }
+
+    private function boundedFilters(Request $request, array $filters): array
+    {
+        $timezone = $this->timezone($request);
+        $to = isset($filters['to'])
+            ? CarbonImmutable::parse($filters['to'], $timezone)->startOfDay()
+            : CarbonImmutable::now($timezone)->startOfDay();
+        $from = isset($filters['from'])
+            ? CarbonImmutable::parse($filters['from'], $timezone)->startOfDay()
+            : $to->subDays(30);
+
+        abort_if($from->diffInDays($to) > 366, 422, 'El rango máximo para reportes es de 366 días.');
+
+        return $filters + ['from' => $from->toDateString(), 'to' => $to->toDateString()];
     }
 
     private function timestampRange(Builder $query, array $filters, string $field, string $timezone): void

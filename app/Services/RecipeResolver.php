@@ -9,6 +9,9 @@ use Illuminate\Validation\ValidationException;
 
 class RecipeResolver
 {
+    /** @var array<string, array<int, array{ingredient_id: int, quantity: float}>> */
+    private array $resolved = [];
+
     public function __construct(private readonly BranchSettings $settings) {}
 
     public function resolve(ProductVariant $variant, array $flavorIds = [], array $modifierIds = []): array
@@ -20,6 +23,12 @@ class RecipeResolver
 
         $flavorIds = array_values(array_unique($flavorIds));
         $modifierIds = array_values(array_unique($modifierIds));
+        sort($flavorIds);
+        sort($modifierIds);
+        $cacheKey = $variant->id.':'.implode(',', $flavorIds).':'.implode(',', $modifierIds);
+        if (isset($this->resolved[$cacheKey])) {
+            return $this->resolved[$cacheKey];
+        }
         $maxFlavors = (int) $variant->max_flavors;
         if ($variant->product->type === 'wings') {
             $maxFlavors = min($maxFlavors, max(1, $this->settings->integer($variant->product->branch_id, 'max_wing_flavors')));
@@ -30,27 +39,22 @@ class RecipeResolver
         if ($variant->required_flavors !== null && count($flavorIds) !== $variant->required_flavors) {
             throw ValidationException::withMessages(['flavors' => "Debes elegir exactamente {$variant->required_flavors} sabor(es)."]);
         }
-        if ($flavorIds && ProductFlavor::query()
-            ->whereIn('id', $flavorIds)
-            ->where('product_id', $variant->product_id)
-            ->where('active', true)
-            ->count() !== count($flavorIds)) {
+        $validFlavorCount = $variant->product->relationLoaded('flavors')
+            ? $variant->product->flavors->whereIn('id', $flavorIds)->where('active', true)->count()
+            : ProductFlavor::query()->whereIn('id', $flavorIds)->where('product_id', $variant->product_id)->where('active', true)->count();
+        if ($flavorIds && $validFlavorCount !== count($flavorIds)) {
             throw ValidationException::withMessages(['flavors' => 'Existe un sabor incompatible o inactivo.']);
         }
         if (count($flavorIds) > 1 && $variant->product->type === 'pizza' && ! $variant->allows_half_and_half) {
             throw ValidationException::withMessages(['flavors' => 'Esta variante no permite mitad y mitad.']);
         }
 
-        $recipes = Recipe::query()
-            ->with('items.ingredient')
-            ->where('product_variant_id', $variant->id)
-            ->where('active', true)
-            ->when(
-                $flavorIds,
-                fn ($query) => $query->whereIn('product_flavor_id', $flavorIds),
-                fn ($query) => $query->whereNull('product_flavor_id'),
-            )
-            ->get();
+        $recipes = $variant->relationLoaded('recipes')
+            ? $variant->recipes->where('active', true)->filter(fn ($recipe) => $flavorIds
+                ? in_array($recipe->product_flavor_id, $flavorIds, true)
+                : $recipe->product_flavor_id === null)->values()
+            : Recipe::query()->with('items.ingredient')->where('product_variant_id', $variant->id)->where('active', true)
+                ->when($flavorIds, fn ($query) => $query->whereIn('product_flavor_id', $flavorIds), fn ($query) => $query->whereNull('product_flavor_id'))->get();
 
         if ($recipes->isEmpty()) {
             $message = $flavorIds
@@ -100,10 +104,9 @@ class RecipeResolver
             }
         }
 
-        $rules = $variant->modifierRules()
-            ->with('modifier.items.ingredient')
-            ->whereIn('modifier_id', $modifierIds)
-            ->get();
+        $rules = $variant->relationLoaded('modifierRules')
+            ? $variant->modifierRules->whereIn('modifier_id', $modifierIds)->values()
+            : $variant->modifierRules()->with('modifier.items.ingredient')->whereIn('modifier_id', $modifierIds)->get();
         if ($rules->count() !== count($modifierIds) || $rules->contains(
             fn ($rule) => ! $rule->allowed
                 || ! $rule->modifier?->active
@@ -126,7 +129,7 @@ class RecipeResolver
             }
         }
 
-        return collect($totals)
+        return $this->resolved[$cacheKey] = collect($totals)
             ->map(fn ($quantity, $id) => [
                 'ingredient_id' => (int) $id,
                 'quantity' => round(max(0, $quantity), 4),

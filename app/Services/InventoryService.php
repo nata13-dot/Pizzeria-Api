@@ -204,6 +204,7 @@ class InventoryService
         $today = $this->clock->today($ingredient->branch_id)->toDateString();
 
         return $ingredient->batches()
+            ->where('branch_id', $ingredient->branch_id)
             ->where('available_quantity', '>', 0)
             ->where(function (Builder $query) use ($today): void {
                 $query->whereNull('expires_at')->orWhereDate('expires_at', '>=', $today);

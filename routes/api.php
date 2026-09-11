@@ -61,6 +61,7 @@ Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function ():
     Route::match(['put', 'patch'], '/product-categories/{category}', [ProductController::class, 'updateCategory'])->middleware('permission:admin.only');
     Route::delete('/product-categories/{category}', [ProductController::class, 'destroyCategory'])->middleware('permission:admin.only');
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:pos.use');
+    Route::get('/pos/catalog', [ProductController::class, 'posCatalog'])->middleware('permission:pos.use');
     Route::post('/products', [ProductController::class, 'store'])->middleware('permission:admin.only');
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:pos.use');
     Route::match(['put', 'patch'], '/products/{product}', [ProductController::class, 'update'])->middleware('permission:admin.only');

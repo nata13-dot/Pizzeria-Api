@@ -31,6 +31,7 @@ use App\Models\Role;
 use App\Models\Setting;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Services\BranchSettings;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -40,7 +41,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->scoped(BranchSettings::class, fn () => new BranchSettings);
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Branch;
 use App\Models\Ingredient;
 use App\Models\InventoryBatch;
 use App\Models\InventoryMovement;
@@ -13,6 +14,7 @@ use App\Models\Setting;
 use App\Models\Unit;
 use App\Models\User;
 use App\Services\OrderService;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
@@ -267,18 +269,93 @@ class OrderFlowTest extends TestCase
         ]);
     }
 
-    public function test_daily_number_reuses_only_cancelled_tail(): void
+    public function test_cancelled_daily_numbers_are_never_reused(): void
     {
-        $this->stock(1000);
-        $a = $this->order();
-        $b = $this->order();
-        $this->assertSame(2, $b['daily_number']);
-        $this->postJson("/api/orders/{$b['id']}/cancel");
-        $c = $this->order();
-        $this->assertSame(2, $c['daily_number']);
-        $this->postJson("/api/orders/{$a['id']}/cancel");
-        $d = $this->order();
-        $this->assertSame(3, $d['daily_number']);
+        $orders = collect(range(1, 4))->map(fn () => $this->order());
+
+        foreach ([2, 3, 4] as $number) {
+            $this->postJson("/api/orders/{$orders[$number - 1]['id']}/cancel")->assertOk();
+        }
+
+        $this->assertSame(5, $this->order()['daily_number']);
+        $this->assertSame(6, $this->order()['daily_number']);
+    }
+
+    public function test_cancelling_an_intermediate_daily_number_does_not_release_it(): void
+    {
+        $orders = collect(range(1, 3))->map(fn () => $this->order());
+        $this->postJson("/api/orders/{$orders[1]['id']}/cancel")->assertOk();
+
+        $this->assertSame(4, $this->order()['daily_number']);
+    }
+
+    public function test_cancelling_the_last_daily_number_does_not_release_it(): void
+    {
+        $first = $this->order();
+        $last = $this->order();
+        $this->postJson("/api/orders/{$last['id']}/cancel")->assertOk();
+
+        $this->assertSame(3, $this->order()['daily_number']);
+        $this->assertSame(1, $first['daily_number']);
+    }
+
+    public function test_daily_number_restarts_when_the_branch_local_day_changes(): void
+    {
+        $this->travelTo(CarbonImmutable::parse('2026-09-10 12:00:00 UTC'));
+        $this->assertSame(1, $this->order()['daily_number']);
+        $this->assertSame(2, $this->order()['daily_number']);
+
+        $this->travelTo(CarbonImmutable::parse('2026-09-11 12:00:00 UTC'));
+        $nextDay = $this->order();
+
+        $this->assertSame(1, $nextDay['daily_number']);
+        $this->assertStringStartsWith('2026-09-11', $nextDay['order_date']);
+    }
+
+    public function test_daily_number_is_independent_between_branches(): void
+    {
+        $otherBranch = Branch::create(['name' => 'Sucursal alterna', 'code' => 'ALT-NUM']);
+        Order::create([
+            'branch_id' => $otherBranch->id,
+            'user_id' => $this->user->id,
+            'order_date' => today()->toDateString(),
+            'daily_number' => 50,
+            'status' => 'cancelled',
+            'type' => 'pickup',
+        ]);
+
+        $this->assertSame(1, $this->order()['daily_number']);
+    }
+
+    public function test_idempotent_order_retry_keeps_the_same_id_and_daily_number(): void
+    {
+        $payload = [
+            'status' => 'confirmed',
+            'type' => 'pickup',
+            'contact_name' => 'Cliente local',
+            'contact_phone' => '5551234567',
+            'items' => [['product_variant_id' => $this->variant->id, 'quantity' => 1]],
+            'payments' => [['method' => 'cash', 'amount' => 200]],
+        ];
+        $headers = ['Idempotency-Key' => 'daily-number-retry-001'];
+
+        $created = $this->postJson('/api/orders', $payload, $headers)->assertCreated()->json();
+        $retried = $this->postJson('/api/orders', $payload, $headers)->assertOk()->json();
+        $next = $this->order();
+
+        $this->assertSame($created['id'], $retried['id']);
+        $this->assertSame(1, $retried['daily_number']);
+        $this->assertSame(2, $next['daily_number']);
+        $this->assertDatabaseCount('orders', 2);
+    }
+
+    public function test_multiple_consecutive_creations_receive_a_gapless_sequence(): void
+    {
+        $numbers = collect(range(1, 10))
+            ->map(fn () => $this->order()['daily_number'])
+            ->all();
+
+        $this->assertSame(range(1, 10), $numbers);
     }
 
     public function test_kitchen_order_can_advance_until_ready(): void
