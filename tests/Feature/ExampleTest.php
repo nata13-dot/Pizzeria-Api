@@ -19,15 +19,19 @@ class ExampleTest extends TestCase
 
     public function test_private_network_origins_are_allowed_for_cors(): void
     {
-        $response = $this->withHeader('Origin', 'http://192.168.1.50:3000')->get('/');
+        $origin = 'http://192.168.1.50:3000';
+        $response = $this->withHeaders([
+            'Origin' => $origin,
+            'Access-Control-Request-Method' => 'POST',
+        ])->options('/api/login');
 
-        $response->assertStatus(200);
-        $response->assertHeader('Access-Control-Allow-Origin', 'http://192.168.1.50:3000');
+        $response->assertNoContent();
+        $response->assertHeader('Access-Control-Allow-Origin', $origin);
     }
 
-    public function test_production_frontend_is_allowed_for_cors(): void
+    public function test_configured_production_frontend_can_preflight_login(): void
     {
-        $origin = 'https://pizzeria-production-fcab.up.railway.app';
+        $origin = 'https://espinazodeldiablo.site';
 
         $response = $this->withHeaders([
             'Origin' => $origin,
@@ -37,6 +41,20 @@ class ExampleTest extends TestCase
 
         $response->assertNoContent();
         $response->assertHeader('Access-Control-Allow-Origin', $origin);
+        $response->assertHeader('Access-Control-Allow-Methods');
+        $response->assertHeader('Access-Control-Allow-Headers');
+    }
+
+    public function test_unconfigured_origin_does_not_receive_cors_allow_origin_header(): void
+    {
+        $response = $this->withHeaders([
+            'Origin' => 'https://unauthorized.example',
+            'Access-Control-Request-Method' => 'POST',
+            'Access-Control-Request-Headers' => 'content-type,authorization',
+        ])->options('/api/login');
+
+        $response->assertNoContent();
+        $response->assertHeaderMissing('Access-Control-Allow-Origin');
     }
 
     public function test_unauthenticated_api_requests_return_unauthorized_instead_of_redirecting(): void
