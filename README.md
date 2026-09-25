@@ -95,9 +95,11 @@ APP_DEBUG=false
 APP_KEY=base64:...
 APP_URL=https://tu-dominio.up.railway.app
 PIZZERIA_SEED_PASSWORD=una-contraseña-segura
-CORS_ALLOWED_ORIGINS=https://localhost
+CORS_ALLOWED_ORIGINS=https://espinazodeldiablo.site,https://localhost
 ```
 
 `APP_KEY` y `PIZZERIA_SEED_PASSWORD` son obligatorias durante el arranque. El seeder sólo utiliza la contraseña al crear la cuenta administrativa por primera vez; nunca vuelve a escribir una cuenta ni los datos comerciales existentes.
+
+`CORS_ALLOWED_ORIGINS` debe incluir el origen exacto del frontend (protocolo, dominio y puerto si aplica), separado por comas. `https://localhost` corresponde al cliente Capacitor y no autoriza el sitio de producción. Si cambias esta variable en un servidor ya instalado, ejecuta `php artisan config:cache` en la API. Cambiar `.env.example` no modifica el `.env` desplegado.
 
 Para datos persistentes agrega PostgreSQL y establece `DB_CONNECTION=pgsql` y `DB_URL=${{Postgres.DATABASE_URL}}`. Si deliberadamente usas SQLite, `DB_DATABASE` debe apuntar a un volumen Railway persistente y debes establecer `SQLITE_PERSISTENT_VOLUME=true`.

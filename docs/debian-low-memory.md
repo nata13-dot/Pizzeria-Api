@@ -11,6 +11,7 @@ En el `.env` de la API:
 ```dotenv
 APP_ENV=production
 APP_DEBUG=false
+CORS_ALLOWED_ORIGINS=https://espinazodeldiablo.site,https://localhost
 CATALOG_CACHE_ENABLED=true
 CATALOG_CACHE_STORE=file
 CATALOG_CACHE_TTL=300
@@ -18,6 +19,17 @@ PERFORMANCE_METRICS_ENABLED=false
 ```
 
 La caché de archivos utiliza `storage/framework/cache/data`; PHP-FPM debe poder escribir ahí. No requiere Redis ni otro proceso residente. Laravel soporta este almacenamiento: [documentación de caché](https://laravel.com/docs/12.x/cache). En varias réplicas se necesita un almacén compartido; los archivos locales no coordinan invalidaciones entre servidores.
+
+Si el login muestra un error CORS, actualizar `CORS_ALLOWED_ORIGINS` en el `.env` real de la API y ejecutar `php artisan config:cache`. Conservar otros orígenes legítimos que ya se utilicen. Un preflight `204` sin `Access-Control-Allow-Origin` no permite iniciar sesión desde ese origen. Verificar después del cambio:
+
+```sh
+curl -i -X OPTIONS https://api.espinazodeldiablo.site/api/login \
+  -H 'Origin: https://espinazodeldiablo.site' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: content-type'
+```
+
+La respuesta debe incluir `Access-Control-Allow-Origin: https://espinazodeldiablo.site`. No se resuelve añadiendo headers al frontend ni usando `fetch` con `no-cors`.
 
 Después de subir el código, ejecutar en `Pizzeria-Api` con el mismo usuario de despliegue y permisos de la aplicación:
 
