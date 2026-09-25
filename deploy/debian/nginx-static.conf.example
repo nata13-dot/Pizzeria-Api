@@ -1,0 +1,21 @@
+# Merge into the frontend's existing server block. Keep existing TLS settings.
+# Set root to the deployed Pizzeria/dist directory.
+gzip on;
+gzip_vary on;
+gzip_comp_level 2;
+gzip_min_length 1024;
+gzip_types text/css application/javascript application/json image/svg+xml;
+
+# Expo fingerprints these bundles. Missing files must return 404, not HTML.
+location ^~ /_expo/static/ {
+    try_files $uri =404;
+    add_header Cache-Control "public, max-age=31536000, immutable";
+}
+
+location = /index.html {
+    add_header Cache-Control "no-cache";
+}
+
+location / {
+    try_files $uri $uri/ /index.html;
+}

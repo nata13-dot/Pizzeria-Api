@@ -8,6 +8,7 @@ use App\Models\ComboItem;
 use App\Models\Modifier;
 use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
+use App\Services\CatalogCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -18,23 +19,26 @@ class ComboController extends Controller
     public function index(Request $request)
     {
         $includeInactive = $this->includeInactive($request);
-        $relation = $includeInactive ? 'allItems' : 'items';
-        $combos = Combo::query()
-            ->where('branch_id', $request->user()->branch_id)
-            ->when(! $includeInactive, fn ($query) => $query->where('active', true))
-            ->with([
-                "{$relation}.variant.product",
-                "{$relation}.options.flavor",
-                "{$relation}.options.modifier",
-            ])
-            ->orderBy('name')
-            ->get();
 
-        if ($includeInactive) {
-            $combos->each(fn (Combo $combo) => $this->exposeAllItems($combo));
-        }
+        return app(CatalogCache::class)->remember((int) $request->user()->branch_id, 'combos:'.(int) $includeInactive, function () use ($request, $includeInactive) {
+            $relation = $includeInactive ? 'allItems' : 'items';
+            $combos = Combo::query()
+                ->where('branch_id', $request->user()->branch_id)
+                ->when(! $includeInactive, fn ($query) => $query->where('active', true))
+                ->with([
+                    "{$relation}.variant.product",
+                    "{$relation}.options.flavor",
+                    "{$relation}.options.modifier",
+                ])
+                ->orderBy('name')
+                ->get();
 
-        return $combos;
+            if ($includeInactive) {
+                $combos->each(fn (Combo $combo) => $this->exposeAllItems($combo));
+            }
+
+            return $combos->toArray();
+        });
     }
 
     public function show(Request $request, Combo $combo)

@@ -1,0 +1,6 @@
+; Merge these directives into the existing application pool, preserving its
+; user/group/listen configuration. Do not create a second pool accidentally.
+pm = ondemand
+pm.max_children = 2
+pm.process_idle_timeout = 20s
+pm.max_requests = 300

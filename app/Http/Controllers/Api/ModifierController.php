@@ -131,7 +131,7 @@ class ModifierController extends Controller
     {
         $this->ownVariant($request, $variant);
         $this->ownModifier($request, $modifier);
-        $variant->modifierRules()->where('modifier_id', $modifier->id)->update(['allowed' => false]);
+        $variant->modifierRules()->where('modifier_id', $modifier->id)->first()?->update(['allowed' => false]);
 
         return response()->noContent();
     }

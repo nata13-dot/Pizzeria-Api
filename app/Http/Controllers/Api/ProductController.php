@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
+use App\Services\CatalogCache;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -30,7 +31,7 @@ class ProductController extends Controller
 
     public function posCatalog(Request $request)
     {
-        return Product::query()
+        return app(CatalogCache::class)->remember((int) $request->user()->branch_id, 'pos', fn () => Product::query()
             ->select(['id', 'branch_id', 'product_category_id', 'name', 'type', 'description', 'image_data_uri', 'active'])
             ->where('branch_id', $request->user()->branch_id)
             ->where('active', true)
@@ -49,7 +50,7 @@ class ProductController extends Controller
                 'variants.modifierRules.modifier:id,name,type,price,active',
             ])
             ->orderBy('name')
-            ->get();
+            ->get()->toArray());
     }
 
     public function show(Request $request, Product $product)
@@ -65,13 +66,13 @@ class ProductController extends Controller
     {
         $includeInactive = $this->includeInactive($request);
 
-        return ProductCategory::query()
+        return app(CatalogCache::class)->remember((int) $request->user()->branch_id, 'categories:'.(int) $includeInactive, fn () => ProductCategory::query()
             ->where('branch_id', $request->user()->branch_id)
             ->when(! $includeInactive, fn ($query) => $query->where('active', true))
             ->withCount(['products' => fn ($query) => $query->where('active', true)])
             ->orderBy('sort_order')
             ->orderBy('name')
-            ->get();
+            ->get()->toArray());
     }
 
     public function showCategory(Request $request, ProductCategory $category)

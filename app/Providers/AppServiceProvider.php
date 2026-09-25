@@ -31,6 +31,7 @@ use App\Models\Role;
 use App\Models\Setting;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Observers\CatalogCacheObserver;
 use App\Services\BranchSettings;
 use Illuminate\Support\ServiceProvider;
 
@@ -49,6 +50,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        foreach ([Product::class, ProductCategory::class, ProductVariant::class,
+            ProductFlavor::class, ProductModifierRule::class, Modifier::class,
+            Combo::class, ComboItem::class, ComboAllowedOption::class] as $model) {
+            $model::observe(CatalogCacheObserver::class);
+        }
+
         foreach ([
             User::class,
             Role::class,
