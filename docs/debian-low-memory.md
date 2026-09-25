@@ -29,7 +29,7 @@ curl -i -X OPTIONS https://api.espinazodeldiablo.site/api/login \
   -H 'Access-Control-Request-Headers: content-type'
 ```
 
-La respuesta debe incluir `Access-Control-Allow-Origin: https://espinazodeldiablo.site`. No se resuelve añadiendo headers al frontend ni usando `fetch` con `no-cors`.
+La respuesta debe incluir `Access-Control-Allow-Origin: https://espinazodeldiablo.site`. Este dominio está autorizado directamente en `config/cors.php`; `CORS_ALLOWED_ORIGINS` agrega otros clientes. Tras actualizar el repositorio, ejecutar `php artisan config:cache` para que el servidor deje de usar la lista anterior. No se resuelve añadiendo headers al frontend ni usando `fetch` con `no-cors`.
 
 Después de subir el código, ejecutar en `Pizzeria-Api` con el mismo usuario de despliegue y permisos de la aplicación:
 

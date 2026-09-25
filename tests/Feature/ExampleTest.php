@@ -7,6 +7,24 @@ use Tests\TestCase;
 
 class ExampleTest extends TestCase
 {
+    public function test_espinazo_remains_allowed_when_environment_lists_only_other_clients(): void
+    {
+        $environment = \Illuminate\Support\Env::getRepository();
+        $previous = $environment->get('CORS_ALLOWED_ORIGINS');
+        try {
+            foreach (['', 'https://localhost'] as $configured) {
+                $environment->set('CORS_ALLOWED_ORIGINS', $configured);
+                $cors = require config_path('cors.php');
+                $this->assertContains('https://espinazodeldiablo.site', $cors['allowed_origins']);
+                $this->assertNotContains('*', $cors['allowed_origins']);
+            }
+        } finally {
+            $previous === null
+                ? $environment->clear('CORS_ALLOWED_ORIGINS')
+                : $environment->set('CORS_ALLOWED_ORIGINS', $previous);
+        }
+    }
+
     /**
      * A basic test example.
      */
