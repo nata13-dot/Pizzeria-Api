@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Combo extends Model
 {
-    protected $fillable = ['branch_id', 'name', 'price', 'active'];
+    protected $fillable = ['branch_id', 'name', 'price', 'image_data_uri', 'active'];
 
     protected function casts(): array
     {

@@ -76,6 +76,7 @@ class ComboController extends Controller
                     'branch_id' => $request->user()->branch_id,
                     'name' => $data['name'],
                     'price' => $data['price'],
+                    'image_data_uri' => $data['image_data_uri'] ?? null,
                     'active' => $data['active'] ?? true,
                 ]);
                 foreach ($items as $row) {
@@ -166,6 +167,26 @@ class ComboController extends Controller
                     ->ignore($combo?->id),
             ],
             'price' => [$required, 'numeric', 'min:0', 'max:9999999999.99'],
+            'image_data_uri' => [
+                'sometimes',
+                'nullable',
+                'string',
+                'max:7000000',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if ($value === null || $value === '') {
+                        return;
+                    }
+                    if (! preg_match('#^data:image/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$#D', $value, $matches)) {
+                        $fail('La imagen debe ser un archivo PNG o JPEG válido.');
+
+                        return;
+                    }
+                    $binary = base64_decode($matches[2], true);
+                    if ($binary === false || strlen($binary) > 5 * 1024 * 1024 || @getimagesizefromstring($binary) === false) {
+                        $fail('La imagen no es válida o supera el máximo de 5 MB.');
+                    }
+                },
+            ],
             'active' => ['sometimes', 'boolean'],
             'items' => [$required, 'array', 'min:1'],
             'items.*.id' => ['sometimes', 'integer', 'distinct'],

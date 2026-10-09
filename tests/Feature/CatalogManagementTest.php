@@ -166,13 +166,21 @@ class CatalogManagementTest extends TestCase
         $combo = $this->postJson('/api/combos', [
             'name' => 'Combo configurable',
             'price' => 95,
+            'image_data_uri' => 'data:image/png;base64,'.base64_encode(base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')),
             'items' => [[
                 'product_variant_id' => $first->id,
                 'quantity' => 1,
                 'options' => [['modifier_id' => $modifier['id']]],
             ]],
-        ])->assertCreated()->json();
+        ])->assertCreated()
+            ->assertJsonPath('image_data_uri', fn ($value) => is_string($value) && str_starts_with($value, 'data:image/png;base64,'))
+            ->json();
         $oldItemId = $combo['items'][0]['id'];
+
+        $this->patchJson("/api/combos/{$combo['id']}", ['image_data_uri' => null])
+            ->assertOk()
+            ->assertJsonPath('image_data_uri', null)
+            ->assertJsonCount(1, 'items');
 
         $order = Order::create([
             'branch_id' => $admin->branch_id,
