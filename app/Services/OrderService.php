@@ -145,9 +145,11 @@ class OrderService
             $order->update(['subtotal' => $subtotal, 'total' => $total]);
             $this->assertPricing($order, $data['pricing_expectation'] ?? null);
 
-            if ($data['status'] === 'pending_payment') {
+            if (in_array($data['status'], ['pending_payment', 'confirmed'], true)) {
                 $requirements = $this->requirements($order);
                 $order->update(['stock_warnings' => $this->warnings($requirements, true)]);
+            }
+            if ($data['status'] === 'pending_payment') {
                 foreach ($requirements as $requirement) {
                     $order->reservations()->create([
                         'ingredient_id' => $requirement['ingredient']->id,
@@ -187,8 +189,9 @@ class OrderService
                 $order->payments()->create($payment + ['user_id' => $user->id]);
             }
             $this->validatePayment($order);
-            $this->transition($order, 'confirmed', $user);
             $order->reservations()->delete();
+            $order->update(['stock_warnings' => $this->warnings($this->requirements($order), true)]);
+            $this->transition($order, 'confirmed', $user);
 
             return $order->fresh()->load($this->relations());
         });

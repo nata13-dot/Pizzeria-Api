@@ -159,6 +159,7 @@ class OrderFlowTest extends TestCase
     {
         $this->stock(100);
         $o = $this->order();
+        $this->assertSame(150, (int) $o['stock_warnings'][0]['shortage']);
         $this->postJson("/api/orders/{$o['id']}/send-to-kitchen")
             ->assertUnprocessable()
             ->assertJsonPath('code', 'stock_shortage')
