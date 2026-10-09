@@ -10,10 +10,19 @@ use App\Models\Order;
 use App\Services\LoyaltyService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class CustomerController extends Controller
 {
+    public function posCustomer(Request $request, Customer $customer)
+    {
+        abort_unless($customer->branch_id === $request->user()->branch_id, 404);
+
+        return response()->json($customer->load('addresses')->only(['id', 'name', 'phone', 'active', 'addresses']))
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function index(Request $request)
     {
         $filters = $request->validate([
@@ -34,15 +43,18 @@ class CustomerController extends Controller
             )
             ->when(array_key_exists('active', $filters), fn (Builder $query) => $query->where('active', $filters['active']))
             ->orderBy('name')
+            ->orderBy('id')
             ->paginate(25);
     }
 
     public function store(Request $request)
     {
-        $data = $this->data($request);
-        $data['branch_id'] = $request->user()->branch_id;
+        return DB::transaction(function () use ($request) {
+            $data = $this->data($request);
+            $data['branch_id'] = $request->user()->branch_id;
 
-        return response()->json(Customer::create($data), 201);
+            return response()->json(Customer::create($data), 201);
+        });
     }
 
     public function show(Request $request, Customer $c, LoyaltyService $loyalty)
@@ -55,64 +67,90 @@ class CustomerController extends Controller
 
     public function update(Request $request, Customer $c)
     {
-        $this->own($request, $c);
-        $c->update($this->data($request, true));
+        return DB::transaction(function () use ($request, $c) {
+            $this->own($request, $c);
+            $c = Customer::query()->whereKey($c->id)->lockForUpdate()->firstOrFail();
+            $this->own($request, $c);
+            $c->update($this->data($request, true));
 
-        return $c;
+            return $c;
+        });
     }
 
     public function address(Request $request, Customer $c)
     {
-        $this->own($request, $c);
-        $data = $request->validate([
-            'label' => 'required|string|max:80',
-            'address' => 'required|string|max:1000',
-            'references' => 'nullable|string',
-            'map_url' => ['nullable', 'url', 'max:2048', 'regex:/^https:\/\//i'],
-            'delivery_zone' => 'nullable|string|max:100',
-            'notes' => 'nullable|string|max:1000',
-            'is_default' => 'sometimes|boolean',
-        ]);
-        if ($data['is_default'] ?? false) {
-            $c->addresses()->update(['is_default' => false]);
-        }
-        $data['is_default'] = ($data['is_default'] ?? false) || ! $c->addresses()->exists();
+        return DB::transaction(function () use ($request, $c) {
+            $this->own($request, $c);
+            $c = Customer::query()->whereKey($c->id)->lockForUpdate()->firstOrFail();
+            $this->own($request, $c);
+            $data = $request->validate([
+                'label' => 'required|string|max:80',
+                'address' => 'required|string|max:1000',
+                'references' => 'nullable|string',
+                'map_url' => ['nullable', 'url', 'max:2048', 'regex:/^https:\/\//i'],
+                'delivery_zone' => 'nullable|string|max:100',
+                'notes' => 'nullable|string|max:1000',
+                'is_default' => 'sometimes|boolean',
+            ]);
+            if ($data['is_default'] ?? false) {
+                $c->addresses()->update(['is_default' => false]);
+            }
+            $data['is_default'] = ($data['is_default'] ?? false) || ! $c->addresses()->exists();
 
-        return response()->json($c->addresses()->create($data), 201);
+            return response()->json($c->addresses()->create($data), 201);
+        });
     }
 
     public function updateAddress(Request $request, Customer $c, CustomerAddress $a)
     {
-        $this->own($request, $c);
-        abort_unless($a->customer_id === $c->id, 404);
-        $data = $request->validate([
-            'label' => 'sometimes|required|string|max:80',
-            'address' => 'sometimes|required|string|max:1000',
-            'references' => 'nullable|string',
-            'map_url' => ['nullable', 'url', 'max:2048', 'regex:/^https:\/\//i'],
-            'delivery_zone' => 'nullable|string|max:100',
-            'notes' => 'nullable|string|max:1000',
-            'is_default' => 'sometimes|boolean',
-        ]);
-        if ($data['is_default'] ?? false) {
-            $c->addresses()->whereKeyNot($a->id)->update(['is_default' => false]);
-        }
-        $a->update($data);
+        return DB::transaction(function () use ($request, $c, $a) {
+            $this->own($request, $c);
+            $c = Customer::query()->whereKey($c->id)->lockForUpdate()->firstOrFail();
+            $a = $c->addresses()->whereKey($a->id)->firstOrFail();
+            $this->own($request, $c);
+            abort_unless($a->customer_id === $c->id, 404);
+            $data = $request->validate([
+                'label' => 'sometimes|required|string|max:80',
+                'address' => 'sometimes|required|string|max:1000',
+                'references' => 'nullable|string',
+                'map_url' => ['nullable', 'url', 'max:2048', 'regex:/^https:\/\//i'],
+                'delivery_zone' => 'nullable|string|max:100',
+                'notes' => 'nullable|string|max:1000',
+                'is_default' => 'sometimes|boolean',
+            ]);
+            if ($data['is_default'] ?? false) {
+                $c->addresses()->whereKeyNot($a->id)->update(['is_default' => false]);
+            }
+            if ($a->is_default && array_key_exists('is_default', $data) && ! $data['is_default']) {
+                $replacement = $c->addresses()->whereKeyNot($a->id)->oldest('id')->first();
+                if ($replacement) {
+                    $replacement->update(['is_default' => true]);
+                } else {
+                    $data['is_default'] = true;
+                }
+            }
+            $a->update($data);
 
-        return $a;
+            return $a;
+        });
     }
 
     public function destroyAddress(Request $request, Customer $c, CustomerAddress $a)
     {
-        $this->own($request, $c);
-        abort_unless($a->customer_id === $c->id, 404);
-        $a->delete();
+        return DB::transaction(function () use ($request, $c, $a) {
+            $this->own($request, $c);
+            $c = Customer::query()->whereKey($c->id)->lockForUpdate()->firstOrFail();
+            $a = $c->addresses()->whereKey($a->id)->firstOrFail();
+            $this->own($request, $c);
+            abort_unless($a->customer_id === $c->id, 404);
+            $a->delete();
 
-        if ($a->is_default) {
-            $c->addresses()->oldest('id')->first()?->update(['is_default' => true]);
-        }
+            if ($a->is_default) {
+                $c->addresses()->oldest('id')->first()?->update(['is_default' => true]);
+            }
 
-        return response()->noContent();
+            return response()->noContent();
+        });
     }
 
     public function orders(Request $request, Customer $c)

@@ -12,6 +12,9 @@ use App\Models\Supplier;
 use App\Models\Unit;
 use App\Services\BranchClock;
 use App\Services\InventoryService;
+use App\Services\Money;
+use App\Services\PurchasePresentationRevision;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -21,17 +24,17 @@ class PurchaseController extends Controller
 {
     public function index(Request $r)
     {
-        return Purchase::with(['supplier', 'items.ingredient'])->where('branch_id', $r->user()->branch_id)->latest('purchased_at')->paginate(25);
+        return Purchase::with(['supplier', 'items.ingredient', 'items.presentation'])->where('branch_id', $r->user()->branch_id)->latest('purchased_at')->paginate(25);
     }
 
     public function show(Request $r, Purchase $purchase)
     {
         abort_unless($purchase->branch_id === $r->user()->branch_id, 404);
 
-        return $purchase->load(['supplier', 'items.ingredient']);
+        return $purchase->load(['supplier', 'items.ingredient', 'items.presentation']);
     }
 
-    public function store(Request $r, InventoryService $inventory, BranchClock $clock)
+    public function store(Request $r, InventoryService $inventory, BranchClock $clock, PurchasePresentationRevision $revisions)
     {
         $data = $r->validate([
             'supplier_id' => [
@@ -49,6 +52,7 @@ class PurchaseController extends Controller
                 'integer',
                 Rule::exists('ingredient_presentations', 'id')->where('active', true),
             ],
+            'items.*.expected_presentation_revision' => 'nullable|string|size:64',
             'items.*.presentations_quantity' => 'required|numeric|gt:0',
             'items.*.total_cost' => 'required|numeric|min:0',
             'items.*.expires_at' => 'nullable|date|after_or_equal:purchased_at',
@@ -59,7 +63,7 @@ class PurchaseController extends Controller
                 'purchased_at' => 'La fecha de compra no puede ser futura en la zona horaria de la sucursal.',
             ]);
         }
-        $purchase = DB::transaction(function () use ($r, $data, $inventory) {
+        $purchase = DB::transaction(function () use ($r, $data, $inventory, $revisions) {
             if ($data['payment_source'] === 'cash') {
                 $cashDay = CashDay::query()
                     ->where('branch_id', $r->user()->branch_id)
@@ -134,6 +138,18 @@ class PurchaseController extends Controller
                 $expectedBaseQuantity = $unitsAreCompatible
                     ? (float) $presentation->quantity * ((float) $equivalentUnit->base_factor / (float) $baseUnit->base_factor)
                     : 0;
+                if ($presentation && $ingredient && $equivalentUnit && $baseUnit
+                    && isset($row['expected_presentation_revision'])
+                    && ! hash_equals(
+                        $row['expected_presentation_revision'],
+                        $revisions->make($presentation, $ingredient, $equivalentUnit, $baseUnit),
+                    )) {
+                    throw new HttpResponseException(response()->json([
+                        'code' => 'presentation_changed',
+                        'message' => 'Esta presentación cambió. Revísala antes de registrar la compra.',
+                        'errors' => ["items.{$index}.ingredient_presentation_id" => ['Esta presentación cambió. Revísala antes de registrar la compra.']],
+                    ], 409));
+                }
                 if (! $unitsAreCompatible
                     || (float) $presentation->quantity <= 0
                     || (float) $presentation->base_quantity <= 0
@@ -144,8 +160,9 @@ class PurchaseController extends Controller
                 }
             }
 
-            $purchase = Purchase::create(['branch_id' => $r->user()->branch_id, 'supplier_id' => $data['supplier_id'] ?? null, 'user_id' => $r->user()->id, 'purchased_at' => $data['purchased_at'], 'payment_source' => $data['payment_source'], 'notes' => $data['notes'] ?? null, 'total' => collect($data['items'])->sum('total_cost')]);
+            $purchase = Purchase::create(['branch_id' => $r->user()->branch_id, 'supplier_id' => $data['supplier_id'] ?? null, 'user_id' => $r->user()->id, 'purchased_at' => $data['purchased_at'], 'payment_source' => $data['payment_source'], 'notes' => $data['notes'] ?? null, 'total' => Money::sum(collect($data['items'])->pluck('total_cost'))]);
             foreach ($data['items'] as $row) {
+                $row['total_cost'] = Money::normalize($row['total_cost']);
                 /** @var IngredientPresentation $presentation */
                 $presentation = $presentations->get($row['ingredient_presentation_id']);
                 /** @var Ingredient $ingredient */
@@ -160,6 +177,6 @@ class PurchaseController extends Controller
             return $purchase;
         });
 
-        return response()->json($purchase->load(['supplier', 'items.ingredient']), 201);
+        return response()->json($purchase->load(['supplier', 'items.ingredient', 'items.presentation']), 201);
     }
 }

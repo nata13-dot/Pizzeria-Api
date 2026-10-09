@@ -13,6 +13,7 @@ use App\Models\Setting;
 use App\Services\BranchClock;
 use App\Services\BranchSettings;
 use App\Services\CashReportService;
+use App\Services\CatalogWrite;
 use App\Services\ReceiptService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
@@ -118,8 +119,8 @@ class AdministrationController extends Controller
             'settings.pending_payment_minutes' => 'sometimes|integer|min:1|max:120',
             'settings.kitchen_lead_minutes' => 'sometimes|integer|min:0|max:1440',
             'settings.delivery_lead_minutes' => 'sometimes|integer|min:0|max:1440',
-            'settings.half_and_half_extra' => 'sometimes|numeric|min:0',
-            'settings.additional_wing_flavor_extra' => 'sometimes|numeric|min:0',
+            'settings.half_and_half_extra' => 'sometimes|numeric|min:0|max:9999999999.99',
+            'settings.additional_wing_flavor_extra' => 'sometimes|numeric|min:0|max:9999999999.99',
             'settings.max_wing_flavors' => 'sometimes|integer|min:1|max:20',
             'settings.delivery_zones' => 'sometimes|array|max:100',
             'settings.delivery_zones.*.name' => 'required|string|max:100|distinct',
@@ -139,7 +140,7 @@ class AdministrationController extends Controller
                 'settings.payment_methods' => 'Debe permanecer al menos un método de pago activo.',
             ]);
         }
-        DB::transaction(function () use ($r, $d): void {
+        CatalogWrite::run($r->user()->branch_id, [], function () use ($r, $d): void {
             foreach ($d['settings'] as $k => $v) {
                 Setting::updateOrCreate(['branch_id' => $r->user()->branch_id, 'key' => $k], ['value' => $v]);
             }

@@ -16,7 +16,7 @@ class UserController extends Controller
 {
     public function index(Request $request)
     {
-        return User::with(['role', 'branch'])->where('branch_id', $request->user()->branch_id)->paginate(30);
+        return User::with(['role', 'branch'])->where('branch_id', $request->user()->branch_id)->orderBy('id')->paginate(30);
     }
 
     public function store(Request $request)

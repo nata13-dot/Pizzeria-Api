@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Ingredient;
 use App\Models\Modifier;
 use App\Models\ProductVariant;
+use App\Services\CatalogWrite;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -36,104 +37,114 @@ class ModifierController extends Controller
 
     public function store(Request $request)
     {
-        $data = $request->validate($this->rules($request));
-        $this->assertItems($request, $data['type'], $data['items'] ?? [], true);
+        return CatalogWrite::run($request->user()->branch_id, [], function () use ($request) {
+            $data = $request->validate($this->rules($request));
+            $this->assertItems($request, $data['type'], $data['items'] ?? [], true);
 
-        $modifier = DB::transaction(function () use ($request, $data) {
-            $modifier = Modifier::create([
-                'branch_id' => $request->user()->branch_id,
-                'name' => $data['name'],
-                'type' => $data['type'],
-                'price' => $data['price'],
-                'active' => $data['active'] ?? true,
-            ]);
-            $modifier->items()->createMany($data['items'] ?? []);
+            $modifier = DB::transaction(function () use ($request, $data) {
+                $modifier = Modifier::create([
+                    'branch_id' => $request->user()->branch_id,
+                    'name' => $data['name'],
+                    'type' => $data['type'],
+                    'price' => $data['price'],
+                    'active' => $data['active'] ?? true,
+                ]);
+                $modifier->items()->createMany($data['items'] ?? []);
 
-            return $modifier;
+                return $modifier;
+            });
+
+            return response()->json($modifier->load('items.ingredient'), 201);
         });
-
-        return response()->json($modifier->load('items.ingredient'), 201);
     }
 
     public function update(Request $request, Modifier $modifier)
     {
-        $this->ownModifier($request, $modifier);
-        $data = $request->validate($this->rules($request, true, $modifier));
-        $modifier->loadMissing('items');
-        $type = $data['type'] ?? $modifier->type;
-        $items = $data['items'] ?? $modifier->items->map->only(['ingredient_id', 'quantity'])->all();
-        $active = (bool) ($data['active'] ?? $modifier->active);
-        $this->assertItems($request, $type, $items, $active);
+        return CatalogWrite::run($request->user()->branch_id, [$modifier], function () use ($request, $modifier) {
+            $this->ownModifier($request, $modifier);
+            $data = $request->validate($this->rules($request, true, $modifier));
+            $modifier->loadMissing('items');
+            $type = $data['type'] ?? $modifier->type;
+            $items = $data['items'] ?? $modifier->items->map->only(['ingredient_id', 'quantity'])->all();
+            $active = (bool) ($data['active'] ?? $modifier->active);
+            $this->assertItems($request, $type, $items, $active);
 
-        if ($modifier->active && array_key_exists('active', $data) && ! $data['active']) {
-            $this->assertNotUsedByActiveCombo($modifier);
-        }
-
-        DB::transaction(function () use ($modifier, $data): void {
-            $modifier->update(collect($data)->except('items')->all());
-            if (array_key_exists('items', $data)) {
-                $modifier->items()->delete();
-                $modifier->items()->createMany($data['items']);
+            if ($modifier->active && array_key_exists('active', $data) && ! $data['active']) {
+                $this->assertNotUsedByActiveCombo($modifier);
             }
-        });
 
-        return $modifier->fresh()->load('items.ingredient');
+            DB::transaction(function () use ($modifier, $data): void {
+                $modifier->update(collect($data)->except('items')->all());
+                if (array_key_exists('items', $data)) {
+                    $modifier->items()->delete();
+                    $modifier->items()->createMany($data['items']);
+                }
+            });
+
+            return $modifier->fresh()->load('items.ingredient');
+        });
     }
 
     public function destroy(Request $request, Modifier $modifier)
     {
-        $this->ownModifier($request, $modifier);
-        if (! $modifier->active) {
-            return response()->noContent();
-        }
-        $this->assertNotUsedByActiveCombo($modifier);
-        $modifier->update(['active' => false]);
+        return CatalogWrite::run($request->user()->branch_id, [$modifier], function () use ($request, $modifier) {
+            $this->ownModifier($request, $modifier);
+            if (! $modifier->active) {
+                return response()->noContent();
+            }
+            $this->assertNotUsedByActiveCombo($modifier);
+            $modifier->update(['active' => false]);
 
-        return response()->noContent();
+            return response()->noContent();
+        });
     }
 
     public function attach(Request $request, ProductVariant $variant)
     {
-        $this->ownVariant($request, $variant);
-        $data = $request->validate([
-            'modifier_id' => ['required', 'integer'],
-            'allowed' => ['sometimes', 'boolean'],
-            'price_override' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:9999999999.99'],
-        ]);
-        $modifier = Modifier::query()
-            ->whereKey($data['modifier_id'])
-            ->where('branch_id', $request->user()->branch_id)
-            ->first();
-        if (! $modifier) {
-            throw ValidationException::withMessages(['modifier_id' => 'El modificador no pertenece a la sucursal.']);
-        }
-
-        $allowed = (bool) ($data['allowed'] ?? true);
-        if ($allowed && (! $modifier->active || ! $variant->active || ! $variant->product->active)) {
-            throw ValidationException::withMessages([
-                'allowed' => 'Solo puedes habilitar modificadores, variantes y productos activos.',
+        return CatalogWrite::run($request->user()->branch_id, [$variant], function () use ($request, $variant) {
+            $this->ownVariant($request, $variant);
+            $data = $request->validate([
+                'modifier_id' => ['required', 'integer'],
+                'allowed' => ['sometimes', 'boolean'],
+                'price_override' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:9999999999.99'],
             ]);
-        }
+            $modifier = Modifier::query()
+                ->whereKey($data['modifier_id'])
+                ->where('branch_id', $request->user()->branch_id)
+                ->first();
+            if (! $modifier) {
+                throw ValidationException::withMessages(['modifier_id' => 'El modificador no pertenece a la sucursal.']);
+            }
 
-        $existingRule = $variant->modifierRules()->where('modifier_id', $modifier->id)->first();
-        $priceOverride = array_key_exists('price_override', $data)
-            ? $data['price_override']
-            : $existingRule?->price_override;
-        $rule = $variant->modifierRules()->updateOrCreate(
-            ['modifier_id' => $modifier->id],
-            ['allowed' => $allowed, 'price_override' => $priceOverride],
-        );
+            $allowed = (bool) ($data['allowed'] ?? true);
+            if ($allowed && (! $modifier->active || ! $variant->active || ! $variant->product->active)) {
+                throw ValidationException::withMessages([
+                    'allowed' => 'Solo puedes habilitar modificadores, variantes y productos activos.',
+                ]);
+            }
 
-        return response()->json($rule->load('modifier.items.ingredient'), 201);
+            $existingRule = $variant->modifierRules()->where('modifier_id', $modifier->id)->first();
+            $priceOverride = array_key_exists('price_override', $data)
+                ? $data['price_override']
+                : $existingRule?->price_override;
+            $rule = $variant->modifierRules()->updateOrCreate(
+                ['modifier_id' => $modifier->id],
+                ['allowed' => $allowed, 'price_override' => $priceOverride],
+            );
+
+            return response()->json($rule->load('modifier.items.ingredient'), 201);
+        });
     }
 
     public function detach(Request $request, ProductVariant $variant, Modifier $modifier)
     {
-        $this->ownVariant($request, $variant);
-        $this->ownModifier($request, $modifier);
-        $variant->modifierRules()->where('modifier_id', $modifier->id)->first()?->update(['allowed' => false]);
+        return CatalogWrite::run($request->user()->branch_id, [$variant, $modifier], function () use ($request, $variant, $modifier) {
+            $this->ownVariant($request, $variant);
+            $this->ownModifier($request, $modifier);
+            $variant->modifierRules()->where('modifier_id', $modifier->id)->first()?->update(['allowed' => false]);
 
-        return response()->noContent();
+            return response()->noContent();
+        });
     }
 
     private function rules(Request $request, bool $partial = false, ?Modifier $modifier = null): array

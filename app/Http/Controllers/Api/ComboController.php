@@ -9,6 +9,7 @@ use App\Models\Modifier;
 use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
 use App\Services\CatalogCache;
+use App\Services\CatalogWrite;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -26,7 +27,7 @@ class ComboController extends Controller
                 ->where('branch_id', $request->user()->branch_id)
                 ->when(! $includeInactive, fn ($query) => $query->where('active', true))
                 ->with([
-                    "{$relation}.variant.product",
+                    "{$relation}.variant.product:id,branch_id,product_category_id,name,type,description,active,created_at,updated_at",
                     "{$relation}.options.flavor",
                     "{$relation}.options.modifier",
                 ])
@@ -49,7 +50,7 @@ class ComboController extends Controller
 
         $relation = $includeInactive ? 'allItems' : 'items';
         $combo->load([
-            "{$relation}.variant.product",
+            "{$relation}.variant.product:id,branch_id,product_category_id,name,type,description,active,created_at,updated_at",
             "{$relation}.options.flavor",
             "{$relation}.options.modifier",
         ]);
@@ -62,87 +63,93 @@ class ComboController extends Controller
 
     public function store(Request $request)
     {
-        $data = $request->validate($this->rules($request));
-        $active = (bool) ($data['active'] ?? true);
-        $items = $this->prepareAndValidateItems($request, $data['items'], $active);
-        if ($active && collect($items)->doesntContain(fn ($item) => $item['active'])) {
-            throw ValidationException::withMessages(['items' => 'Un combo activo necesita al menos un componente activo.']);
-        }
-
-        $combo = DB::transaction(function () use ($request, $data, $items) {
-            $combo = Combo::create([
-                'branch_id' => $request->user()->branch_id,
-                'name' => $data['name'],
-                'price' => $data['price'],
-                'active' => $data['active'] ?? true,
-            ]);
-            foreach ($items as $row) {
-                $item = $combo->allItems()->create(collect($row)->except('id', 'options')->all());
-                $item->options()->createMany($row['options']);
+        return CatalogWrite::run($request->user()->branch_id, [], function () use ($request) {
+            $data = $request->validate($this->rules($request));
+            $active = (bool) ($data['active'] ?? true);
+            $items = $this->prepareAndValidateItems($request, $data['items'], $active);
+            if ($active && collect($items)->doesntContain(fn ($item) => $item['active'])) {
+                throw ValidationException::withMessages(['items' => 'Un combo activo necesita al menos un componente activo.']);
             }
 
-            return $combo;
-        });
+            $combo = DB::transaction(function () use ($request, $data, $items) {
+                $combo = Combo::create([
+                    'branch_id' => $request->user()->branch_id,
+                    'name' => $data['name'],
+                    'price' => $data['price'],
+                    'active' => $data['active'] ?? true,
+                ]);
+                foreach ($items as $row) {
+                    $item = $combo->allItems()->create(collect($row)->except('id', 'options')->all());
+                    $item->options()->createMany($row['options']);
+                }
 
-        return response()->json($this->loadAllItems($combo), 201);
+                return $combo;
+            });
+
+            return response()->json($this->loadAllItems($combo), 201);
+        });
     }
 
     public function update(Request $request, Combo $combo)
     {
-        $this->ownCombo($request, $combo);
-        $data = $request->validate($this->rules($request, true, $combo));
-        $active = (bool) ($data['active'] ?? $combo->active);
-        $items = null;
-
-        if (array_key_exists('items', $data)) {
-            $items = $this->prepareAndValidateItems($request, $data['items'], $active, $combo);
-            if ($active && collect($items)->doesntContain(fn ($item) => $item['active'])) {
-                throw ValidationException::withMessages(['items' => 'Un combo activo necesita al menos un componente activo.']);
-            }
-        } elseif (array_key_exists('active', $data) && $data['active']) {
-            $items = $this->currentItemsPayload($combo);
-            $items = $this->prepareAndValidateItems($request, $items, true, $combo);
-            if (collect($items)->doesntContain(fn ($item) => $item['active'])) {
-                throw ValidationException::withMessages(['active' => 'Agrega o reactiva un componente antes de activar el combo.']);
-            }
+        return CatalogWrite::run($request->user()->branch_id, [$combo], function () use ($request, $combo) {
+            $this->ownCombo($request, $combo);
+            $data = $request->validate($this->rules($request, true, $combo));
+            $active = (bool) ($data['active'] ?? $combo->active);
             $items = null;
-        }
 
-        DB::transaction(function () use ($combo, $data, $items): void {
-            $combo->update(collect($data)->except('items')->all());
-            if ($items === null) {
-                return;
-            }
-
-            $keptIds = [];
-            foreach ($items as $row) {
-                if (isset($row['id'])) {
-                    $item = $combo->allItems()->whereKey($row['id'])->firstOrFail();
-                    $item->update(collect($row)->except('id', 'options')->all());
-                    $keptIds[] = $item->id;
-                } else {
-                    $item = $combo->allItems()->create(collect($row)->except('id', 'options')->all());
-                    $keptIds[] = $item->id;
+            if (array_key_exists('items', $data)) {
+                $items = $this->prepareAndValidateItems($request, $data['items'], $active, $combo);
+                if ($active && collect($items)->doesntContain(fn ($item) => $item['active'])) {
+                    throw ValidationException::withMessages(['items' => 'Un combo activo necesita al menos un componente activo.']);
                 }
-                $item->options()->delete();
-                $item->options()->createMany($row['options']);
+            } elseif (array_key_exists('active', $data) && $data['active']) {
+                $items = $this->currentItemsPayload($combo);
+                $items = $this->prepareAndValidateItems($request, $items, true, $combo);
+                if (collect($items)->doesntContain(fn ($item) => $item['active'])) {
+                    throw ValidationException::withMessages(['active' => 'Agrega o reactiva un componente antes de activar el combo.']);
+                }
+                $items = null;
             }
 
-            $combo->allItems()->whereNotIn('id', $keptIds)->update(['active' => false]);
-        });
+            DB::transaction(function () use ($combo, $data, $items): void {
+                $combo->update(collect($data)->except('items')->all());
+                if ($items === null) {
+                    return;
+                }
 
-        return $this->loadAllItems($combo->fresh());
+                $keptIds = [];
+                foreach ($items as $row) {
+                    if (isset($row['id'])) {
+                        $item = $combo->allItems()->whereKey($row['id'])->firstOrFail();
+                        $item->update(collect($row)->except('id', 'options')->all());
+                        $keptIds[] = $item->id;
+                    } else {
+                        $item = $combo->allItems()->create(collect($row)->except('id', 'options')->all());
+                        $keptIds[] = $item->id;
+                    }
+                    $item->options()->delete();
+                    $item->options()->createMany($row['options']);
+                }
+
+                $combo->allItems()->whereNotIn('id', $keptIds)->update(['active' => false]);
+            });
+
+            return $this->loadAllItems($combo->fresh());
+        });
     }
 
     public function destroy(Request $request, Combo $combo)
     {
-        $this->ownCombo($request, $combo);
-        if (! $combo->active) {
-            return response()->noContent();
-        }
-        $combo->update(['active' => false]);
+        return CatalogWrite::run($request->user()->branch_id, [$combo], function () use ($request, $combo) {
+            $this->ownCombo($request, $combo);
+            if (! $combo->active) {
+                return response()->noContent();
+            }
+            $combo->update(['active' => false]);
 
-        return response()->noContent();
+            return response()->noContent();
+        });
     }
 
     private function rules(Request $request, bool $partial = false, ?Combo $combo = null): array
@@ -289,7 +296,7 @@ class ComboController extends Controller
 
     private function loadAllItems(Combo $combo): Combo
     {
-        $combo->load(['allItems.variant.product', 'allItems.options.flavor', 'allItems.options.modifier']);
+        $combo->load(['allItems.variant.product:id,branch_id,product_category_id,name,type,description,active,created_at,updated_at', 'allItems.options.flavor', 'allItems.options.modifier']);
         $this->exposeAllItems($combo);
 
         return $combo;

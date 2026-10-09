@@ -2,14 +2,18 @@
 
 namespace Tests\Feature;
 
+use App\Events\OrderStatusChanged;
 use App\Models\Modifier;
 use App\Models\Product;
+use App\Models\ProductConfigurationOperation;
 use App\Models\ProductVariant;
+use App\Models\Recipe;
 use App\Models\User;
 use App\Services\CatalogCache;
 use Illuminate\Foundation\Testing\RefreshDatabaseState;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -100,5 +104,35 @@ class CatalogCacheTest extends TestCase
         }
         $keys = array_keys(Cache::store('array')->getStore()->all());
         $this->assertCount(1, array_filter($keys, fn ($key) => str_contains($key, '999:fixed')));
+    }
+
+    public function test_failed_configuration_does_not_publish_partial_catalog_after_rollback(): void
+    {
+        $product = Product::create(['branch_id' => auth()->user()->branch_id, 'name' => 'Atomic cache', 'type' => 'other']);
+        $variant = $product->variants()->create(['name' => 'Normal', 'price' => 10]);
+        $this->getJson('/api/pos/catalog')->assertOk()->assertJsonPath('0.variants.0.price', '10.00');
+        $path = '/api/products/'.$product->id.'/configuration';
+        $revision = $this->getJson($path)->assertOk()->json('revision');
+        $injected = false;
+        ProductConfigurationOperation::created(function () use (&$injected) {
+            $injected = true;
+            throw new \RuntimeException('Rollback receipt');
+        });
+        $this->putJson($path, ['expected_revision' => $revision, 'operation_key' => 'cache-rollback-test', 'product' => ['name' => 'Partial'], 'variants' => [['id' => $variant->id, 'price' => 20]], 'flavors' => [], 'removed_variant_ids' => [], 'removed_flavor_ids' => []])->assertStatus(500);
+        $this->assertTrue($injected);
+        $this->getJson('/api/pos/catalog')->assertOk()->assertJsonPath('0.name', 'Atomic cache')->assertJsonPath('0.variants.0.price', '10.00');
+        $this->assertDatabaseCount('product_configuration_operations', 0);
+    }
+
+    public function test_price_rollback_does_not_dispatch_order_event_with_real_commits(): void
+    {
+        $product = Product::create(['branch_id' => auth()->user()->branch_id, 'name' => 'Event rollback', 'type' => 'other']);
+        $variant = $product->variants()->create(['name' => 'Normal', 'price' => 10]);
+        Recipe::create(['product_variant_id' => $variant->id, 'name' => 'Base']);
+        Event::fake([OrderStatusChanged::class]);
+        $this->postJson('/api/orders', ['status' => 'confirmed', 'type' => 'pickup', 'contact_name' => 'Ana', 'contact_phone' => '123', 'items' => [['product_variant_id' => $variant->id, 'quantity' => 1]], 'payments' => [['method' => 'cash', 'amount' => 1]], 'pricing_expectation' => ['items' => [['unit_price' => 1, 'total' => 1]], 'delivery_fee' => 0, 'total' => 1]])->assertStatus(409);
+        $this->assertDatabaseCount('orders', 0);
+        $this->assertDatabaseCount('order_payments', 0);
+        Event::assertNotDispatched(OrderStatusChanged::class);
     }
 }

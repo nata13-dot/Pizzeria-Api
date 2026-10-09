@@ -10,6 +10,7 @@ use App\Models\InventoryBatch;
 use App\Models\Unit;
 use App\Services\BranchClock;
 use App\Services\InventoryService;
+use App\Services\PurchasePresentationRevision;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -17,9 +18,27 @@ use Illuminate\Validation\ValidationException;
 
 class IngredientController extends Controller
 {
-    public function index(Request $r)
+    public function index(Request $r, PurchasePresentationRevision $revisions)
     {
-        return Ingredient::with(['baseUnit', 'type', 'presentations.equivalentUnit'])->where('branch_id', $r->user()->branch_id)->orderBy('name')->paginate($r->integer('per_page', 25));
+        $filters = $r->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+            'active' => ['sometimes', 'boolean'],
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        $page = Ingredient::with(['baseUnit', 'type', 'presentations.equivalentUnit'])
+            ->where('branch_id', $r->user()->branch_id)
+            ->when(isset($filters['search']) && $filters['search'] !== '', fn ($query) => $query->where(
+                fn ($matches) => $matches->where('name', 'like', "%{$filters['search']}%")->orWhere('sku', 'like', "%{$filters['search']}%"),
+            ))
+            ->when(isset($filters['active']), fn ($query) => $query->where('active', $filters['active']))
+            ->orderBy('name')->orderBy('id')
+            ->paginate($filters['per_page'] ?? 25);
+
+        $page->getCollection()->each(fn (Ingredient $ingredient) => $this->appendPurchaseRevisions($ingredient, $revisions));
+
+        return $page;
     }
 
     public function store(Request $r, InventoryService $inventory, BranchClock $clock)
@@ -42,11 +61,14 @@ class IngredientController extends Controller
         return response()->json($ingredient->load(['baseUnit', 'type', 'batches']), 201);
     }
 
-    public function show(Request $r, Ingredient $ingredient)
+    public function show(Request $r, Ingredient $ingredient, PurchasePresentationRevision $revisions)
     {
         $this->own($r, $ingredient);
 
-        return $ingredient->load(['baseUnit', 'type', 'presentations.equivalentUnit', 'batches']);
+        $ingredient->load(['baseUnit', 'type', 'presentations.equivalentUnit', 'batches']);
+        $this->appendPurchaseRevisions($ingredient, $revisions);
+
+        return $ingredient;
     }
 
     public function update(Request $r, Ingredient $ingredient)
@@ -187,6 +209,23 @@ class IngredientController extends Controller
         }
 
         return false;
+    }
+
+    private function appendPurchaseRevisions(Ingredient $ingredient, PurchasePresentationRevision $revisions): void
+    {
+        if (! $ingredient->baseUnit) {
+            return;
+        }
+        $ingredient->presentations->each(function (IngredientPresentation $presentation) use ($ingredient, $revisions): void {
+            if ($presentation->equivalentUnit) {
+                $presentation->setAttribute('purchase_revision', $revisions->make(
+                    $presentation,
+                    $ingredient,
+                    $presentation->equivalentUnit,
+                    $ingredient->baseUnit,
+                ));
+            }
+        });
     }
 
     private function presentationData(

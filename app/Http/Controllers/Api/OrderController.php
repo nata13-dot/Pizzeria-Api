@@ -6,6 +6,7 @@ use App\Exceptions\StockShortageException;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Services\BranchSettings;
+use App\Services\Money;
 use App\Services\OrderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -37,6 +38,18 @@ class OrderController extends Controller
             ->paginate(30);
     }
 
+    public function operation(Request $request)
+    {
+        $data = $request->validate(['key' => 'required|string|min:8|max:100|regex:/^[A-Za-z0-9._:-]+$/']);
+        $order = Order::where('branch_id', $request->user()->branch_id)
+            ->where('user_id', $request->user()->id)
+            ->where('idempotency_key', $data['key'])
+            ->first();
+
+        return response()->json(['order' => $order?->only(['id', 'daily_number', 'status', 'total', 'scheduled_at'])])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function show(Request $r, Order $order)
     {
         $this->own($r, $order);
@@ -46,12 +59,20 @@ class OrderController extends Controller
 
     public function store(Request $r, OrderService $service)
     {
-        $d = $this->data($r);
         $idempotencyKey = $r->header('Idempotency-Key');
         if ($idempotencyKey !== null) {
             validator(['idempotency_key' => $idempotencyKey], [
                 'idempotency_key' => 'required|string|min:8|max:100|regex:/^[A-Za-z0-9._:-]+$/',
             ])->validate();
+
+        }
+        // Resolve a previously committed operation before validating a now-obsolete cart.
+        $existing = $idempotencyKey ? Order::where('branch_id', $r->user()->branch_id)->where('idempotency_key', $idempotencyKey)->first() : null;
+        if ($existing) {
+            return response()->json($existing->load(['customer', 'items.flavors.flavor', 'items.modifiers', 'items.components', 'items.ingredients.ingredient', 'payments', 'delivery', 'histories']));
+        }
+        $d = $this->data($r);
+        if ($idempotencyKey !== null) {
             $d['idempotency_key'] = $idempotencyKey;
         }
         $d['customer_id'] = $r->validate([
@@ -246,9 +267,9 @@ class OrderController extends Controller
                 422,
                 'El cobro contra entrega solo puede registrarse durante el reparto.',
             );
-            $paid = (float) $order->payments()->sum('amount');
-            $due = max(0, (float) $order->total - $paid);
-            abort_if($order->courtesy || $due <= .009, 422, 'El pedido no tiene saldo pendiente por cobrar.');
+            $paid = Money::sum($order->payments()->pluck('amount'));
+            $due = Money::total(Money::normalize($order->total), $paid, '0.00');
+            abort_if($order->courtesy || Money::compare($due, 0) === 0, 422, 'El pedido no tiene saldo pendiente por cobrar.');
             $order->payments()->create([
                 'method' => $data['method'],
                 'amount' => $due,
@@ -264,11 +285,17 @@ class OrderController extends Controller
     private function data(Request $r): array
     {
         return $r->validate([
+            'pricing_expectation' => 'sometimes|array:items,delivery_fee,total|required_array_keys:items,delivery_fee,total',
+            'pricing_expectation.items' => 'required_with:pricing_expectation|array|min:1',
+            'pricing_expectation.items.*.unit_price' => 'required|numeric|min:0|max:9999999999.99',
+            'pricing_expectation.items.*.total' => 'required|numeric|min:0|max:9999999999.99',
+            'pricing_expectation.delivery_fee' => 'required_with:pricing_expectation|numeric|min:0|max:9999999999.99',
+            'pricing_expectation.total' => 'required_with:pricing_expectation|numeric|min:0|max:9999999999.99',
             'status' => 'sometimes|in:draft,pending_payment,confirmed', 'type' => 'required|in:pickup,whatsapp,delivery,dine_in', 'sales_channel' => 'sometimes|in:local,whatsapp,phone,other', 'scheduled_at' => 'nullable|date|after:now',
             'contact_name' => 'required_if:type,pickup|nullable|string|max:150', 'contact_phone' => 'required_if:type,pickup|nullable|string|max:30',
             'discount' => 'sometimes|numeric|min:0', 'delivery_fee' => 'sometimes|numeric|min:0', 'courtesy' => 'sometimes|boolean', 'collect_on_delivery' => 'sometimes|boolean', 'notes' => 'nullable|string',
             'items' => 'required|array|min:1', 'items.*.product_variant_id' => 'required_without:items.*.combo_id|exists:product_variants,id',
-            'items.*.combo_id' => 'required_without:items.*.product_variant_id|exists:combos,id', 'items.*.quantity' => 'required|numeric|gt:0',
+            'items.*.combo_id' => 'required_without:items.*.product_variant_id|exists:combos,id', 'items.*.quantity' => 'required|numeric|gt:0|max:99999999.99|decimal:0,2',
             'items.*.flavor_ids' => 'array', 'items.*.flavor_ids.*' => 'exists:product_flavors,id', 'items.*.modifier_ids' => 'array', 'items.*.modifier_ids.*' => 'exists:modifiers,id',
             'items.*.components' => 'array', 'items.*.components.*.combo_item_id' => 'required|exists:combo_items,id', 'items.*.components.*.flavor_ids' => 'array',
             'items.*.components.*.unit_index' => 'sometimes|integer|min:1',

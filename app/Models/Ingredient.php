@@ -38,6 +38,9 @@ class Ingredient extends Model
 
     public function getCurrentStockAttribute(): string
     {
+        if (array_key_exists('current_stock', $this->attributes)) {
+            return number_format((float) $this->attributes['current_stock'], 4, '.', '');
+        }
         $today = app(BranchClock::class)->today($this->branch_id)->toDateString();
 
         return number_format((float) $this->batches()->where(function ($query) use ($today) {

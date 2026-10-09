@@ -17,4 +17,9 @@ class PurchaseItem extends Model
     {
         return $this->belongsTo(Ingredient::class);
     }
+
+    public function presentation()
+    {
+        return $this->belongsTo(IngredientPresentation::class, 'ingredient_presentation_id');
+    }
 }

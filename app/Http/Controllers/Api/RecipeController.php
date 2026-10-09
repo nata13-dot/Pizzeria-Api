@@ -7,6 +7,7 @@ use App\Models\Ingredient;
 use App\Models\ProductFlavor;
 use App\Models\ProductVariant;
 use App\Models\Recipe;
+use App\Services\CatalogWrite;
 use App\Services\RecipeResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,105 +16,152 @@ use Illuminate\Validation\ValidationException;
 
 class RecipeController extends Controller
 {
+    public function index(Request $request)
+    {
+        $data = $request->validate(['search' => 'sometimes|nullable|string|max:100', 'page' => 'sometimes|integer|min:1']);
+        $search = trim($data['search'] ?? '');
+
+        return Recipe::query()->whereHas('variant.product', fn ($q) => $q->where('branch_id', $request->user()->branch_id))
+            ->when($search !== '', fn ($q) => $q->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                    ->orWhereHas('variant', fn ($q) => $q->where('name', 'like', "%{$search}%"))
+                    ->orWhereHas('variant.product', fn ($q) => $q->where('name', 'like', "%{$search}%"))
+                    ->orWhereHas('flavor', fn ($q) => $q->where('name', 'like', "%{$search}%"));
+            }))->with(['variant:id,product_id,name,active', 'variant.product:id,name,type,branch_id,active', 'flavor:id,product_id,name,active'])
+            ->withCount('items')->orderBy('name')->orderBy('id')->paginate(25);
+    }
+
+    public function destinations(Request $request)
+    {
+        $data = $request->validate(['search' => 'sometimes|nullable|string|max:100', 'page' => 'sometimes|integer|min:1']);
+        $search = trim($data['search'] ?? '');
+
+        return ProductVariant::query()->select(['id', 'product_id', 'name', 'active'])
+            ->whereHas('product', fn ($q) => $q->where('branch_id', $request->user()->branch_id)->where('active', true))
+            ->where('active', true)->when($search !== '', fn ($q) => $q->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")->orWhereHas('product', fn ($q) => $q->where('name', 'like', "%{$search}%"));
+            }))->with($this->destinationRelations())->orderBy('name')->orderBy('id')->paginate(25);
+    }
+
+    public function destination(Request $request, ProductVariant $variant)
+    {
+        $this->ownVariant($request, $variant);
+
+        return response()->json($variant->load($this->destinationRelations()))->header('Cache-Control', 'no-store');
+    }
+
+    private function destinationRelations(): array
+    {
+        return ['product:id,branch_id,name,type,active', 'product.flavors:id,product_id,name,active', 'recipes:id,product_variant_id,product_flavor_id,name,active'];
+    }
+
     public function show(Request $request, Recipe $recipe)
     {
         $this->ownRecipe($request, $recipe);
 
-        return $recipe->load(['variant.product', 'flavor', 'items.ingredient']);
+        return $recipe->load(['variant.product', 'flavor', 'items.ingredient.baseUnit']);
     }
 
     public function store(Request $request)
     {
-        $data = $request->validate($this->rules());
-        $variant = ProductVariant::with('product')->findOrFail($data['product_variant_id']);
-        $this->ownVariant($request, $variant);
-        $this->assertRecipeReferences($request, $variant, $data['product_flavor_id'] ?? null, $data['items'], true);
-        $this->assertRecipeSlotIsAvailable($variant, $data['product_flavor_id'] ?? null);
+        return CatalogWrite::run($request->user()->branch_id, [], function () use ($request) {
+            $data = $request->validate($this->rules());
+            $variant = ProductVariant::with('product')->findOrFail($data['product_variant_id']);
+            $this->ownVariant($request, $variant);
+            $this->assertRecipeReferences($request, $variant, $data['product_flavor_id'] ?? null, $data['items'], true);
+            $this->assertRecipeSlotIsAvailable($variant, $data['product_flavor_id'] ?? null);
 
-        $recipe = DB::transaction(function () use ($data) {
-            $recipe = Recipe::create([
-                'product_variant_id' => $data['product_variant_id'],
-                'product_flavor_id' => $data['product_flavor_id'] ?? null,
-                'name' => $data['name'],
-                'active' => $data['active'] ?? true,
-            ]);
-            $recipe->items()->createMany($data['items']);
+            $recipe = DB::transaction(function () use ($data) {
+                $recipe = Recipe::create([
+                    'product_variant_id' => $data['product_variant_id'],
+                    'product_flavor_id' => $data['product_flavor_id'] ?? null,
+                    'name' => $data['name'],
+                    'active' => $data['active'] ?? true,
+                ]);
+                $recipe->items()->createMany($data['items']);
 
-            return $recipe;
+                return $recipe;
+            });
+
+            return response()->json($recipe->load(['flavor', 'items.ingredient.baseUnit']), 201);
         });
-
-        return response()->json($recipe->load(['flavor', 'items.ingredient']), 201);
     }
 
     public function update(Request $request, Recipe $recipe)
     {
-        $this->ownRecipe($request, $recipe);
-        $data = $request->validate($this->rules(true));
-        $recipe->loadMissing(['variant.product', 'items']);
-        $flavorId = array_key_exists('product_flavor_id', $data)
-            ? $data['product_flavor_id']
-            : $recipe->product_flavor_id;
-        $items = $data['items'] ?? $recipe->items->map->only(['ingredient_id', 'quantity', 'component'])->all();
-        $active = (bool) ($data['active'] ?? $recipe->active);
+        return CatalogWrite::run($request->user()->branch_id, [$recipe], function () use ($request, $recipe) {
+            $this->ownRecipe($request, $recipe);
+            $data = $request->validate($this->rules(true));
+            $recipe->loadMissing(['variant.product', 'items']);
+            $flavorId = array_key_exists('product_flavor_id', $data)
+                ? $data['product_flavor_id']
+                : $recipe->product_flavor_id;
+            $items = $data['items'] ?? $recipe->items->map->only(['ingredient_id', 'quantity', 'component'])->all();
+            $active = (bool) ($data['active'] ?? $recipe->active);
 
-        $this->assertRecipeReferences($request, $recipe->variant, $flavorId, $items, $active);
-        $this->assertRecipeSlotIsAvailable($recipe->variant, $flavorId, $recipe);
+            $this->assertRecipeReferences($request, $recipe->variant, $flavorId, $items, $active);
+            $this->assertRecipeSlotIsAvailable($recipe->variant, $flavorId, $recipe);
 
-        DB::transaction(function () use ($recipe, $data, $flavorId): void {
-            $recipe->update([
-                ...collect($data)->except('items', 'product_variant_id')->all(),
-                'product_flavor_id' => $flavorId,
-            ]);
+            DB::transaction(function () use ($recipe, $data, $flavorId): void {
+                $recipe->update([
+                    ...collect($data)->except('items', 'product_variant_id')->all(),
+                    'product_flavor_id' => $flavorId,
+                ]);
 
-            if (array_key_exists('items', $data)) {
-                $recipe->items()->delete();
-                $recipe->items()->createMany($data['items']);
-            }
+                if (array_key_exists('items', $data)) {
+                    $recipe->items()->delete();
+                    $recipe->items()->createMany($data['items']);
+                }
+            });
+
+            return $recipe->fresh()->load(['variant.product', 'flavor', 'items.ingredient.baseUnit']);
         });
-
-        return $recipe->fresh()->load(['variant.product', 'flavor', 'items.ingredient']);
     }
 
     public function destroy(Request $request, Recipe $recipe)
     {
-        $this->ownRecipe($request, $recipe);
-        if (! $recipe->active) {
-            return response()->noContent();
-        }
-        $recipe->update(['active' => false]);
+        return CatalogWrite::run($request->user()->branch_id, [$recipe], function () use ($request, $recipe) {
+            $this->ownRecipe($request, $recipe);
+            if (! $recipe->active) {
+                return response()->noContent();
+            }
+            $recipe->update(['active' => false]);
 
-        return response()->noContent();
+            return response()->noContent();
+        });
     }
 
     public function cloneRecipe(Request $request, Recipe $recipe)
     {
-        $this->ownRecipe($request, $recipe);
-        $data = $request->validate([
-            'product_variant_id' => ['required', 'integer'],
-            'product_flavor_id' => ['sometimes', 'nullable', 'integer'],
-            'name' => ['required', 'string', 'max:150'],
-            'active' => ['sometimes', 'boolean'],
-        ]);
-        $target = ProductVariant::with('product')->findOrFail($data['product_variant_id']);
-        $this->ownVariant($request, $target);
-        $items = $recipe->items()->get()->map->only(['ingredient_id', 'quantity', 'component'])->all();
-        $active = (bool) ($data['active'] ?? true);
-        $this->assertRecipeReferences($request, $target, $data['product_flavor_id'] ?? null, $items, $active);
-        $this->assertRecipeSlotIsAvailable($target, $data['product_flavor_id'] ?? null);
-
-        $clone = DB::transaction(function () use ($data, $items) {
-            $clone = Recipe::create([
-                'product_variant_id' => $data['product_variant_id'],
-                'product_flavor_id' => $data['product_flavor_id'] ?? null,
-                'name' => $data['name'],
-                'active' => $data['active'] ?? true,
+        return CatalogWrite::run($request->user()->branch_id, [$recipe], function () use ($request, $recipe) {
+            $this->ownRecipe($request, $recipe);
+            $data = $request->validate([
+                'product_variant_id' => ['required', 'integer'],
+                'product_flavor_id' => ['sometimes', 'nullable', 'integer'],
+                'name' => ['required', 'string', 'max:150'],
+                'active' => ['sometimes', 'boolean'],
             ]);
-            $clone->items()->createMany($items);
+            $target = ProductVariant::with('product')->findOrFail($data['product_variant_id']);
+            $this->ownVariant($request, $target);
+            $items = $recipe->items()->get()->map->only(['ingredient_id', 'quantity', 'component'])->all();
+            $active = (bool) ($data['active'] ?? true);
+            $this->assertRecipeReferences($request, $target, $data['product_flavor_id'] ?? null, $items, $active);
+            $this->assertRecipeSlotIsAvailable($target, $data['product_flavor_id'] ?? null);
 
-            return $clone;
+            $clone = DB::transaction(function () use ($data, $items) {
+                $clone = Recipe::create([
+                    'product_variant_id' => $data['product_variant_id'],
+                    'product_flavor_id' => $data['product_flavor_id'] ?? null,
+                    'name' => $data['name'],
+                    'active' => $data['active'] ?? true,
+                ]);
+                $clone->items()->createMany($items);
+
+                return $clone;
+            });
+
+            return response()->json($clone->load(['flavor', 'items.ingredient.baseUnit']), 201);
         });
-
-        return response()->json($clone->load(['flavor', 'items.ingredient']), 201);
     }
 
     public function resolve(Request $request, ProductVariant $variant, RecipeResolver $resolver)

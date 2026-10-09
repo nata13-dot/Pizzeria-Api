@@ -19,11 +19,27 @@ class ProductionController extends Controller
 {
     public function recipes(Request $request)
     {
-        return ProductionRecipe::with([
-            'items.ingredient.baseUnit',
-            'outputIngredient.baseUnit',
-            'yieldUnit',
-        ])->where('branch_id', $request->user()->branch_id)->get();
+        $data = $request->validate(['paginated' => 'sometimes|boolean', 'page' => 'sometimes|integer|min:1', 'search' => 'sometimes|nullable|string|max:100', 'active' => 'sometimes|boolean']);
+        $query = ProductionRecipe::with(['items.ingredient.baseUnit', 'outputIngredient.baseUnit', 'yieldUnit'])
+            ->where('branch_id', $request->user()->branch_id);
+        $search = trim($data['search'] ?? '');
+        $query->when($search !== '', fn ($q) => $q->where(function ($q) use ($search) {
+            $q->where('name', 'like', "%{$search}%")->orWhereHas('outputIngredient', fn ($q) => $q->where('name', 'like', "%{$search}%"));
+        }));
+        if (array_key_exists('active', $data)) {
+            $query->where('active', $request->boolean('active'));
+        }
+        $query->orderBy('name')->orderBy('id');
+
+        // Keep the array response for existing consumers; opt in to pagination.
+        return $request->boolean('paginated') ? $query->paginate(25) : $query->get();
+    }
+
+    public function showRecipe(Request $request, ProductionRecipe $recipe)
+    {
+        abort_unless($recipe->branch_id === $request->user()->branch_id, 404);
+
+        return response()->json($this->loadRecipe($recipe))->header('Cache-Control', 'no-store');
     }
 
     public function storeRecipe(Request $request)

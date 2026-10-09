@@ -14,6 +14,7 @@ use App\Models\ProductVariant;
 use App\Models\User;
 use App\Notifications\SystemAlertNotification;
 use Carbon\CarbonImmutable;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -65,14 +66,14 @@ class OrderService
                 'pending_expires_at' => $data['status'] === 'pending_payment'
                     ? now()->addMinutes(max(1, $this->settings->integer($branch->id, 'pending_payment_minutes')))
                     : null,
-                'discount' => $data['discount'] ?? 0,
+                'discount' => Money::normalize($data['discount'] ?? 0),
                 'delivery_fee' => $deliveryFee,
                 'courtesy' => $data['courtesy'] ?? false,
                 'collect_on_delivery' => $data['collect_on_delivery'] ?? false,
                 'notes' => $data['notes'] ?? null,
             ]);
 
-            $subtotal = 0.0;
+            $subtotal = '0.00';
             $variantIds = collect($data['items'])
                 ->pluck('product_variant_id')
                 ->filter()
@@ -85,7 +86,7 @@ class OrderService
                 ->keyBy('id');
             foreach ($data['items'] as $row) {
                 if (isset($row['combo_id'])) {
-                    $subtotal += $this->addCombo($order, $row);
+                    $subtotal = Money::sum([$subtotal, $this->addCombo($order, $row)]);
 
                     continue;
                 }
@@ -101,18 +102,19 @@ class OrderService
                         'items' => 'Uno de los modificadores no está permitido para el producto.',
                     ]);
                 }
+                $this->assertStuffedCrustAllowed($variant, $modifierRules);
 
                 $flavorIds = array_values(array_unique($row['flavor_ids'] ?? []));
-                $unitPrice = (float) $variant->price + $this->selectionExtra($variant, $flavorIds);
+                $unitPrice = Money::sum([$variant->price, $this->selectionExtra($variant, $flavorIds)]);
                 foreach ($modifierRules as $rule) {
-                    $unitPrice += (float) ($rule->price_override ?? $rule->modifier->price);
+                    $unitPrice = Money::sum([$unitPrice, $rule->price_override ?? $rule->modifier->price]);
                 }
                 $item = $order->items()->create([
                     'product_variant_id' => $variant->id,
                     'name' => trim($variant->product->name.' '.$variant->name),
                     'quantity' => $row['quantity'],
                     'unit_price' => $unitPrice,
-                    'total' => $unitPrice * $row['quantity'],
+                    'total' => Money::multiply($unitPrice, $row['quantity']),
                     'notes' => $row['notes'] ?? null,
                 ]);
 
@@ -136,11 +138,12 @@ class OrderService
                         'price' => $rule->price_override ?? $rule->modifier->price,
                     ]);
                 }
-                $subtotal += (float) $item->total;
+                $subtotal = Money::sum([$subtotal, $item->total]);
             }
 
-            $total = max(0, $subtotal - (float) ($data['discount'] ?? 0) + $deliveryFee);
+            $total = Money::total($subtotal, $data['discount'] ?? 0, $deliveryFee);
             $order->update(['subtotal' => $subtotal, 'total' => $total]);
+            $this->assertPricing($order, $data['pricing_expectation'] ?? null);
 
             if ($data['status'] === 'pending_payment') {
                 $requirements = $this->requirements($order);
@@ -157,6 +160,7 @@ class OrderService
                 $order->delivery()->create($data['delivery']);
             }
             foreach ($data['payments'] ?? [] as $payment) {
+                $payment['amount'] = Money::normalize($payment['amount']);
                 $order->payments()->create($payment + ['user_id' => $user->id]);
             }
             if ($data['status'] === 'confirmed') {
@@ -165,7 +169,7 @@ class OrderService
             $order->histories()->create(['user_id' => $user->id, 'to_status' => $data['status']]);
             $this->broadcastAfterCommit($order, $user?->id);
 
-            return $order->load($this->relations());
+            return $order->fresh()->load($this->relations());
         });
     }
 
@@ -174,11 +178,12 @@ class OrderService
         return DB::transaction(function () use ($order, $payments, $user) {
             $order = $this->locked($order);
             if ($order->status === 'confirmed') {
-                return $order->load($this->relations());
+                return $order->fresh()->load($this->relations());
             }
             $this->expect($order, ['draft', 'pending_payment']);
             $order->payments()->delete();
             foreach ($payments as $payment) {
+                $payment['amount'] = Money::normalize($payment['amount']);
                 $order->payments()->create($payment + ['user_id' => $user->id]);
             }
             $this->validatePayment($order);
@@ -201,7 +206,7 @@ class OrderService
         $result = DB::transaction(function () use ($order, $user, $allowShortage, $ignoreSchedule, &$blockedWarnings) {
             $order = $this->locked($order);
             if ($order->inventory_deducted && in_array($order->status, ['kitchen_pending', 'preparing', 'prepared', 'ready', 'on_way', 'delivered'], true)) {
-                return $order->load($this->relations());
+                return $order->fresh()->load($this->relations());
             }
             $this->expect($order, ['confirmed']);
 
@@ -283,7 +288,7 @@ class OrderService
         return DB::transaction(function () use ($order, $status, $user) {
             $order = $this->locked($order);
             if ($order->status === $status) {
-                return $order->load($this->relations());
+                return $order->fresh()->load($this->relations());
             }
             $requiredPermission = match ($status) {
                 'preparing', 'prepared', 'ready' => 'kitchen.use',
@@ -308,7 +313,7 @@ class OrderService
                 throw ValidationException::withMessages(['status' => 'Los pedidos para recoger no pasan a reparto.']);
             }
             if ($status === 'delivered' && ! $order->courtesy
-                && (float) $order->payments()->sum('amount') + .009 < (float) $order->total) {
+                && Money::compare(Money::sum($order->payments()->pluck('amount')), $order->total) < 0) {
                 throw ValidationException::withMessages([
                     'payments' => 'Debes registrar el pago completo antes de marcar el pedido como entregado.',
                 ]);
@@ -328,7 +333,7 @@ class OrderService
         return DB::transaction(function () use ($order, $user, $comment) {
             $order = $this->locked($order);
             if ($order->status === 'cancelled') {
-                return $order->load($this->relations());
+                return $order->fresh()->load($this->relations());
             }
             $advanced = in_array($order->status, ['preparing', 'prepared', 'ready', 'on_way', 'delivered'], true);
             abort_if(
@@ -431,9 +436,9 @@ class OrderService
                 'payments' => 'Uno de los métodos de pago está desactivado en los ajustes.',
             ]);
         }
-        $paid = (float) $order->payments()->sum('amount');
+        $paid = Money::sum($order->payments()->pluck('amount'));
         if ($order->collect_on_delivery) {
-            if ($order->type !== 'delivery' || $paid > (float) $order->total + .009) {
+            if ($order->type !== 'delivery' || Money::compare($paid, $order->total) > 0) {
                 throw ValidationException::withMessages([
                     'payments' => 'El cobro contra entrega solo aplica a domicilio y no puede exceder el total.',
                 ]);
@@ -441,14 +446,14 @@ class OrderService
 
             return;
         }
-        if (abs($paid - (float) $order->total) > .009) {
+        if (Money::compare($paid, $order->total) !== 0) {
             throw ValidationException::withMessages([
                 'payments' => 'Los pagos deben cubrir exactamente el total.',
             ]);
         }
     }
 
-    private function addCombo(Order $order, array $row): float
+    private function addCombo(Order $order, array $row): string
     {
         $combo = Combo::with([
             'items.variant.product.flavors',
@@ -465,7 +470,7 @@ class OrderService
 
         $totals = [];
         $components = [];
-        $unitExtras = 0.0;
+        $unitExtras = '0.00';
         foreach ($combo->items as $component) {
             abort_unless($component->variant?->product?->branch_id === $order->branch_id, 422);
             $componentSelections = $selectionRows->where('combo_item_id', $component->id)->values();
@@ -504,6 +509,11 @@ class OrderService
                 if ($allowedModifiers->isNotEmpty() && collect($modifierIds)->diff($allowedModifiers)->isNotEmpty()) {
                     throw ValidationException::withMessages(['items' => 'El combo contiene un modificador no permitido.']);
                 }
+                $modifierRules = $component->variant->modifierRules->whereIn('modifier_id', $modifierIds)->values();
+                if ($modifierRules->count() !== count($modifierIds)) {
+                    throw ValidationException::withMessages(['items' => 'El combo contiene un modificador no permitido.']);
+                }
+                $this->assertStuffedCrustAllowed($component->variant, $modifierRules);
 
                 $resolved = $this->recipes->resolve(
                     $component->variant,
@@ -515,12 +525,8 @@ class OrderService
                         + $ingredient['quantity'] * $selectionQuantity * $row['quantity'];
                 }
 
-                $modifierRules = $component->variant->modifierRules->whereIn('modifier_id', $modifierIds)->values();
-                $modifierExtra = $modifierRules->sum(
-                    fn ($rule) => (float) ($rule->price_override ?? $rule->modifier->price),
-                );
-                $unitExtras += ($this->selectionExtra($component->variant, $flavors) + $modifierExtra)
-                    * $selectionQuantity;
+                $modifierExtra = Money::sum($modifierRules->map(fn ($rule) => $rule->price_override ?? $rule->modifier->price));
+                $unitExtras = Money::sum([$unitExtras, Money::multiply(Money::sum([$this->selectionExtra($component->variant, $flavors), $modifierExtra]), $selectionQuantity)]);
                 $components[] = [
                     'combo_item_id' => $component->id,
                     'product_variant_id' => $component->variant->id,
@@ -537,13 +543,13 @@ class OrderService
             }
         }
 
-        $unitPrice = (float) $combo->price + $unitExtras;
+        $unitPrice = Money::sum([$combo->price, $unitExtras]);
         $item = $order->items()->create([
             'combo_id' => $combo->id,
             'name' => $combo->name,
             'quantity' => $row['quantity'],
             'unit_price' => $unitPrice,
-            'total' => $unitPrice * $row['quantity'],
+            'total' => Money::multiply($unitPrice, $row['quantity']),
             'notes' => $row['notes'] ?? null,
         ]);
         foreach ($totals as $ingredientId => $quantity) {
@@ -551,7 +557,21 @@ class OrderService
         }
         $item->components()->createMany($components);
 
-        return (float) $item->total;
+        return $item->total;
+    }
+
+    private function assertStuffedCrustAllowed(ProductVariant $variant, iterable $modifierRules): void
+    {
+        if (PizzaVariantRules::allowsStuffedCrust($variant->name)) {
+            return;
+        }
+        foreach ($modifierRules as $rule) {
+            if ($rule->modifier?->type === 'stuffed_crust') {
+                throw ValidationException::withMessages([
+                    'items' => "{$variant->name} solo admite orilla normal.",
+                ]);
+            }
+        }
     }
 
     /** @return array<int, array{ingredient: Ingredient, quantity: float}> */
@@ -593,30 +613,59 @@ class OrderService
         return $warnings;
     }
 
-    private function selectionExtra(ProductVariant $variant, array $flavorIds): float
+    private function assertPricing(Order $order, ?array $expected): void
+    {
+        if ($expected === null) {
+            return;
+        }
+        $actual = [
+            'items' => $order->items()->orderBy('id')->get()->map(fn ($item) => ['unit_price' => $item->unit_price, 'total' => $item->total])->all(),
+            'delivery_fee' => $order->delivery_fee, 'total' => $order->total,
+        ];
+        $matches = count($expected['items']) === count($actual['items']);
+        foreach ($actual['items'] as $index => $item) {
+            foreach (['unit_price', 'total'] as $field) {
+                if (! isset($expected['items'][$index][$field]) || Money::compare($item[$field], $expected['items'][$index][$field]) !== 0) {
+                    $matches = false;
+                }
+            }
+        }
+        foreach (['delivery_fee', 'total'] as $field) {
+            if (Money::compare($actual[$field], $expected[$field]) !== 0) {
+                $matches = false;
+            }
+        }
+        if (! $matches) {
+            throw new HttpResponseException(response()->json([
+                'code' => 'price_changed', 'message' => 'Los precios cambiaron. Revisa los importes antes de registrar el pedido.', 'pricing' => $actual,
+            ], 409));
+        }
+    }
+
+    private function selectionExtra(ProductVariant $variant, array $flavorIds): string
     {
         $count = count(array_unique($flavorIds));
         if ($count < 2) {
-            return 0.0;
+            return '0.00';
         }
 
         return match ($variant->product->type) {
-            'pizza' => (float) $this->settings->get($variant->product->branch_id, 'half_and_half_extra'),
-            'wings' => (float) $this->settings->get($variant->product->branch_id, 'additional_wing_flavor_extra') * ($count - 1),
-            default => 0.0,
+            'pizza' => Money::normalize($this->settings->get($variant->product->branch_id, 'half_and_half_extra')),
+            'wings' => Money::multiply($this->settings->get($variant->product->branch_id, 'additional_wing_flavor_extra'), $count - 1),
+            default => '0.00',
         };
     }
 
-    private function deliveryFee(int $branchId, array $data): float
+    private function deliveryFee(int $branchId, array $data): string
     {
         if (($data['type'] ?? null) !== 'delivery') {
-            return 0.0;
+            return '0.00';
         }
 
         $configuredZones = collect($this->settings->get($branchId, 'delivery_zones'))
             ->filter(fn ($zone) => is_array($zone));
         if ($configuredZones->isEmpty()) {
-            return (float) ($data['delivery_fee'] ?? 0);
+            return '0.00';
         }
         $zones = $configuredZones
             ->filter(fn ($zone) => is_array($zone) && ($zone['active'] ?? true));
@@ -634,7 +683,7 @@ class OrderService
             ]);
         }
 
-        return round(max(0, (float) ($zone['fee'] ?? 0)), 2);
+        return Money::normalize($zone['fee'] ?? 0);
     }
 
     private function transition(Order $order, string $to, $user, ?string $comment = null): void
