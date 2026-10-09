@@ -64,6 +64,28 @@ class OperationalSettingsTest extends TestCase
         $this->assertDatabaseHas('user_devices', ['push_token' => 'device-two', 'notification_sound_mode' => 'random']);
     }
 
+    public function test_existing_push_token_is_reassigned_to_the_current_user(): void
+    {
+        $this->seed();
+        $cashier = User::where('email', 'cajero@pizzeria.local')->firstOrFail();
+        $admin = User::where('email', 'admin@pizzeria.local')->firstOrFail();
+
+        Sanctum::actingAs($cashier);
+        $this->postJson('/api/register-device', [
+            'push_token' => 'shared-device', 'name' => 'Teléfono', 'platform' => 'android-fcm',
+        ])->assertCreated();
+
+        Sanctum::actingAs($admin);
+        $this->postJson('/api/register-device', [
+            'push_token' => 'shared-device', 'name' => 'Teléfono administrador', 'platform' => 'android-fcm',
+        ])->assertCreated()->assertJsonPath('user_id', $admin->id);
+
+        $this->assertDatabaseCount('user_devices', 1);
+        $this->assertDatabaseHas('user_devices', [
+            'push_token' => 'shared-device', 'user_id' => $admin->id, 'name' => 'Teléfono administrador',
+        ]);
+    }
+
     private function variant(User $user): ProductVariant
     {
         $unit = Unit::where('symbol', 'pz')->firstOrFail();

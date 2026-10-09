@@ -8,6 +8,7 @@ use App\Models\Branch;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use App\Models\UserDevice;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -136,7 +137,10 @@ class UserController extends Controller
             'notification_channels.*' => ['required', 'string', 'max:120', 'distinct', 'regex:/^orders_arrival_(tone_v3_(default|bell|kitchen|soft|ding)|custom_v1_custom_[a-z0-9_]+)$/'],
         ]);
 
-        return response()->json($r->user()->devices()->updateOrCreate(['push_token' => $d['push_token']], $d + ['last_seen_at' => now(), 'active' => true]), 201);
+        return response()->json(UserDevice::updateOrCreate(
+            ['push_token' => $d['push_token']],
+            $d + ['user_id' => $r->user()->id, 'last_seen_at' => now(), 'active' => true],
+        ), 201);
     }
 
     public function notifications(Request $r)
