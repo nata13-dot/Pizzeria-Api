@@ -4,6 +4,7 @@ return [
 
     'system_admin_email' => env('SYSTEM_ADMIN_EMAIL'),
     'firebase_service_account_json' => env('FIREBASE_SERVICE_ACCOUNT_JSON'),
+    'firebase_service_account_path' => env('FIREBASE_SERVICE_ACCOUNT_PATH', storage_path('app/firebase-service-account.json')),
 
     /*
     |--------------------------------------------------------------------------

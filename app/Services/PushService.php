@@ -91,6 +91,12 @@ class PushService
     {
         $raw = trim((string) config('services.firebase_service_account_json'));
         if ($raw === '') {
+            $path = (string) config('services.firebase_service_account_path');
+            if ($path !== '' && is_readable($path)) {
+                $raw = (string) file_get_contents($path);
+            }
+        }
+        if (trim($raw) === '') {
             return null;
         }
         $decoded = json_decode($raw, true);
