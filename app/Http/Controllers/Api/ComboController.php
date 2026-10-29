@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Combo;
+use App\Services\BranchClock;
 use App\Models\ComboItem;
 use App\Models\Modifier;
 use App\Models\ProductFlavor;
@@ -20,8 +21,10 @@ class ComboController extends Controller
     public function index(Request $request)
     {
         $includeInactive = $this->includeInactive($request);
+        // The register only sees combos sold today; the day is part of the cache key.
+        $today = app(BranchClock::class)->today($request->user()->branch_id)->dayOfWeek;
 
-        return app(CatalogCache::class)->remember((int) $request->user()->branch_id, 'combos:'.(int) $includeInactive, function () use ($request, $includeInactive) {
+        return app(CatalogCache::class)->remember((int) $request->user()->branch_id, 'combos:'.(int) $includeInactive.($includeInactive ? '' : ':'.$today), function () use ($request, $includeInactive, $today) {
             $relation = $includeInactive ? 'allItems' : 'items';
             $combos = Combo::query()
                 ->where('branch_id', $request->user()->branch_id)
@@ -32,7 +35,8 @@ class ComboController extends Controller
                     "{$relation}.options.modifier",
                 ])
                 ->orderBy('name')
-                ->get();
+                ->get()
+                ->when(! $includeInactive, fn ($combos) => $combos->filter(fn (Combo $combo) => $combo->availableOn($today))->values());
 
             if ($includeInactive) {
                 $combos->each(fn (Combo $combo) => $this->exposeAllItems($combo));
@@ -78,6 +82,7 @@ class ComboController extends Controller
                     'price' => $data['price'],
                     'image_data_uri' => $data['image_data_uri'] ?? null,
                     'active' => $data['active'] ?? true,
+                    'available_days' => $data['available_days'] ?? null,
                 ]);
                 foreach ($items as $row) {
                     $item = $combo->allItems()->create(collect($row)->except('id', 'options')->all());
@@ -188,6 +193,8 @@ class ComboController extends Controller
                 },
             ],
             'active' => ['sometimes', 'boolean'],
+            'available_days' => ['sometimes', 'nullable', 'array', 'max:7'],
+            'available_days.*' => ['integer', 'between:0,6', 'distinct'],
             'items' => [$required, 'array', 'min:1'],
             'items.*.id' => ['sometimes', 'integer', 'distinct'],
             'items.*.product_variant_id' => ['required', 'integer'],

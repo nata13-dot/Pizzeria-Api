@@ -465,6 +465,9 @@ class OrderService
             'items.options',
         ])->findOrFail($row['combo_id']);
         abort_unless($combo->branch_id === $order->branch_id && $combo->active, 422);
+        if (! $combo->availableOn(app(BranchClock::class)->today($order->branch_id)->dayOfWeek)) {
+            throw ValidationException::withMessages(['items' => "El paquete {$combo->name} no está disponible hoy."]);
+        }
         $selectionRows = collect($row['components'] ?? []);
         if ($selectionRows->map(fn ($selection) => ($selection['combo_item_id'] ?? '').':'.($selection['unit_index'] ?? 'all'))->unique()->count() !== $selectionRows->count()
             || $selectionRows->pluck('combo_item_id')->diff($combo->items->pluck('id'))->isNotEmpty()) {

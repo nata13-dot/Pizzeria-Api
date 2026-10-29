@@ -6,11 +6,17 @@ use Illuminate\Database\Eloquent\Model;
 
 class Combo extends Model
 {
-    protected $fillable = ['branch_id', 'name', 'price', 'image_data_uri', 'active'];
+    protected $fillable = ['branch_id', 'name', 'price', 'image_data_uri', 'active', 'available_days'];
 
     protected function casts(): array
     {
-        return ['price' => 'decimal:2', 'active' => 'boolean'];
+        return ['price' => 'decimal:2', 'active' => 'boolean', 'available_days' => 'array'];
+    }
+
+    /** Whether the combo is sold on the given day of the week (0 = Sunday). */
+    public function availableOn(int $dayOfWeek): bool
+    {
+        return empty($this->available_days) || in_array($dayOfWeek, array_map('intval', $this->available_days), true);
     }
 
     /** Components available when creating a new order. */

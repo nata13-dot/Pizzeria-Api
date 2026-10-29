@@ -11,6 +11,7 @@ use App\Models\ProductVariant;
 use App\Models\Recipe;
 use App\Models\Unit;
 use App\Models\User;
+use App\Services\BranchClock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -93,5 +94,35 @@ class ComboOrderTest extends TestCase
         $this->postJson('/api/orders', $payload)->assertUnprocessable()->assertJsonValidationErrors('items');
         $payload['items'][0]['components'][0]['flavor_ids'][] = $flavors[1]->id;
         $this->postJson('/api/orders', $payload)->assertCreated()->assertJsonCount(2, 'items.0.components.0.flavors');
+    }
+
+    public function test_combo_is_only_listed_and_sold_on_its_days(): void
+    {
+        $this->seed();
+        $u = User::first();
+        Sanctum::actingAs($u);
+        $g = Unit::where('symbol', 'g')->first();
+        $cheese = Ingredient::create(['branch_id' => $u->branch_id, 'base_unit_id' => $g->id, 'name' => 'Queso']);
+        InventoryBatch::create(['branch_id' => $u->branch_id, 'ingredient_id' => $cheese->id, 'received_at' => today(), 'initial_quantity' => 1000, 'available_quantity' => 1000]);
+        $product = Product::create(['branch_id' => $u->branch_id, 'name' => 'Pizza', 'type' => 'pizza']);
+        $variant = ProductVariant::create(['product_id' => $product->id, 'name' => 'Grande', 'price' => 200]);
+        Recipe::create(['product_variant_id' => $variant->id, 'name' => 'Base'])->items()->create(['ingredient_id' => $cheese->id, 'quantity' => 100, 'component' => 'base']);
+        $today = app(BranchClock::class)->today($u->branch_id)->dayOfWeek;
+        $other = ($today + 1) % 7;
+
+        $this->postJson('/api/combos', ['name' => 'Mal', 'price' => 1, 'available_days' => [7], 'items' => [['product_variant_id' => $variant->id, 'quantity' => 1]]])
+            ->assertUnprocessable()->assertJsonValidationErrors('available_days.0');
+        $tomorrow = $this->postJson('/api/combos', ['name' => 'Promo de otro día', 'price' => 300, 'available_days' => [$other], 'items' => [['product_variant_id' => $variant->id, 'quantity' => 2]]])->assertCreated()->json();
+        $daily = $this->postJson('/api/combos', ['name' => 'Promo diaria', 'price' => 320, 'items' => [['product_variant_id' => $variant->id, 'quantity' => 2]]])->assertCreated()->json();
+
+        $this->assertSame(['Promo diaria'], collect($this->getJson('/api/combos')->assertOk()->json())->pluck('name')->all());
+        $this->assertCount(2, $this->getJson('/api/combos?include_inactive=1')->assertOk()->json());
+
+        $order = fn (array $combo) => ['status' => 'confirmed', 'type' => 'pickup', 'contact_name' => 'Cliente', 'contact_phone' => '5551234567', 'items' => [['combo_id' => $combo['id'], 'quantity' => 1, 'components' => [['combo_item_id' => $combo['items'][0]['id']]]]], 'payments' => [['method' => 'cash', 'amount' => $combo['price']]]];
+        $this->postJson('/api/orders', $order($tomorrow))->assertUnprocessable()->assertJsonValidationErrors('items');
+        $this->postJson('/api/orders', $order($daily))->assertCreated();
+
+        $this->patchJson("/api/combos/{$tomorrow['id']}", ['available_days' => [$today, $other]])->assertOk();
+        $this->assertCount(2, $this->getJson('/api/combos')->assertOk()->json());
     }
 }
