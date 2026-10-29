@@ -16,6 +16,21 @@ class InventoryService
 {
     public function __construct(private readonly BranchClock $clock) {}
 
+    /** Ingredients with usable stock, status and shortage to their minimum, for one branch. */
+    public function stockQuery(int $branchId)
+    {
+        $today = $this->clock->today($branchId)->toDateString();
+        $stockSql = 'COALESCE((SELECT SUM(available_quantity) FROM inventory_batches WHERE inventory_batches.ingredient_id = ingredients.id AND (expires_at IS NULL OR expires_at >= ?)), 0)';
+
+        return Ingredient::query()->with(['baseUnit', 'type'])
+            ->where('ingredients.branch_id', $branchId)
+            ->select('ingredients.*')
+            ->selectRaw("{$stockSql} AS current_stock", [$today])
+            ->selectRaw("CASE WHEN {$stockSql} <= 0 THEN 'out' WHEN {$stockSql} <= ingredients.critical_stock THEN 'critical' WHEN {$stockSql} <= ingredients.minimum_stock THEN 'low' ELSE 'available' END AS stock_status", [$today, $today, $today])
+            ->selectRaw("CASE WHEN ingredients.minimum_stock > ({$stockSql}) THEN ingredients.minimum_stock - ({$stockSql}) ELSE 0 END AS missing_to_minimum", [$today, $today])
+            ->selectSub(InventoryBatch::query()->select('expires_at')->whereColumn('ingredient_id', 'ingredients.id')->where('available_quantity', '>', 0)->whereNotNull('expires_at')->whereDate('expires_at', '>=', $today)->orderBy('expires_at')->limit(1), 'next_expiry');
+    }
+
     public function move(
         InventoryBatch $batch,
         float $quantity,

@@ -79,7 +79,7 @@ class InventoryController extends Controller
         $row = $this->inventoryItemsQuery($request, $clock)->whereKey($ingredient->id)->firstOrFail();
         $row->setRelation('presentations', $ingredient->presentations()->with('equivalentUnit')->orderBy('name')->get());
         $row->setAttribute('batches', InventoryBatch::query()->where('branch_id', $ingredient->branch_id)->where('ingredient_id', $ingredient->id)
-            ->orderByRaw('expires_at IS NULL')->orderBy('expires_at')->limit(10)->get());
+            ->orderByRaw('available_quantity <= 0')->orderByRaw('expires_at IS NULL')->orderBy('expires_at')->limit(10)->get());
         $row->setAttribute('movements', InventoryMovement::query()->with('batch')->where('branch_id', $ingredient->branch_id)
             ->where('ingredient_id', $ingredient->id)->latest()->limit(10)->get()->map(fn ($movement) => $this->movementPayload($movement)));
 
@@ -129,20 +129,30 @@ class InventoryController extends Controller
         return Alert::with(['ingredient', 'batch'])->where('branch_id', $r->user()->branch_id)->whereNull('resolved_at')->latest()->get();
     }
 
-    public function adjust(Request $r, InventoryService $service)
+    public function adjust(Request $r, InventoryService $service, BranchClock $clock)
     {
         $data = $r->validate([
-            'inventory_batch_id' => 'required|exists:inventory_batches,id',
+            'inventory_batch_id' => 'required_without:ingredient_id|prohibits:ingredient_id|integer|exists:inventory_batches,id',
+            'ingredient_id' => 'required_without:inventory_batch_id|integer|exists:ingredients,id',
             'quantity' => 'required|numeric|not_in:0',
             'reason' => 'required|in:waste,expiry,preparation_error,gift,internal_use,manual,loss,initial,correction',
-            'comment' => 'nullable|string',
+            'comment' => 'nullable|string|max:1000',
         ]);
         $this->validateDirection($data);
 
-        $adjustment = DB::transaction(function () use ($r, $data, $service) {
+        if (isset($data['ingredient_id'])) {
+            return response()->json($this->adjustIngredient($r, $data, $service, $clock), 201);
+        }
+
+        $adjustment = DB::transaction(function () use ($r, $data, $service, $clock) {
             /** @var InventoryBatch $batch */
             $batch = InventoryBatch::query()->lockForUpdate()->findOrFail($data['inventory_batch_id']);
             abort_unless($batch->branch_id === $r->user()->branch_id, 404);
+            if ((float) $data['quantity'] > 0 && $batch->expires_at && $batch->expires_at->toDateString() < $clock->today($batch->branch_id)->toDateString()) {
+                throw ValidationException::withMessages([
+                    'quantity' => 'No se puede agregar existencia a un lote caducado. Registra la entrada en un lote vigente.',
+                ]);
+            }
 
             $adjustment = InventoryAdjustment::create([
                 'branch_id' => $batch->branch_id,
@@ -170,6 +180,83 @@ class InventoryController extends Controller
         return response()->json($adjustment, 201);
     }
 
+    /**
+     * Adjusts an ingredient without asking the user for a lot: removals follow
+     * FEFO across usable lots (expired lots first when the reason is expiry) and
+     * additions go to the most recent valid lot, or a new one when none exists.
+     */
+    private function adjustIngredient(Request $r, array $data, InventoryService $service, BranchClock $clock): InventoryAdjustment
+    {
+        return DB::transaction(function () use ($r, $data, $service, $clock) {
+            /** @var Ingredient $ingredient */
+            $ingredient = Ingredient::query()->lockForUpdate()->findOrFail($data['ingredient_id']);
+            abort_unless($ingredient->branch_id === $r->user()->branch_id, 404);
+            $quantity = (float) $data['quantity'];
+            $today = $clock->today($ingredient->branch_id)->toDateString();
+            $type = in_array($data['reason'], ['waste', 'expiry', 'preparation_error', 'loss'], true) ? 'waste' : 'adjustment';
+            $comment = $data['comment'] ?? null;
+            $lots = InventoryBatch::query()->where('ingredient_id', $ingredient->id)->where('branch_id', $ingredient->branch_id);
+
+            if ($quantity < 0) {
+                $query = (clone $lots)->where('available_quantity', '>', 0);
+                if ($data['reason'] === 'expiry') {
+                    $query->orderByRaw('CASE WHEN expires_at IS NOT NULL AND expires_at < ? THEN 0 ELSE 1 END', [$today]);
+                } else {
+                    $query->where(fn ($q) => $q->whereNull('expires_at')->orWhereDate('expires_at', '>=', $today));
+                }
+                $batches = $query->orderByRaw('expires_at IS NULL')->orderBy('expires_at')->orderBy('received_at')->orderBy('id')->lockForUpdate()->get();
+                $available = (float) $batches->sum('available_quantity');
+                if ($available + .00001 < abs($quantity)) {
+                    throw ValidationException::withMessages([
+                        'quantity' => 'La salida supera la existencia disponible ('.rtrim(rtrim(number_format($available, 4, '.', ''), '0'), '.').'). Revisa la cantidad.',
+                    ]);
+                }
+                $remaining = abs($quantity);
+                $touched = [];
+                foreach ($batches as $batch) {
+                    if ($remaining <= .00001) {
+                        break;
+                    }
+                    $touched[] = [$batch, min($remaining, (float) $batch->available_quantity)];
+                    $remaining -= end($touched)[1];
+                }
+            } else {
+                $batch = (clone $lots)->where(fn ($q) => $q->whereNull('expires_at')->orWhereDate('expires_at', '>=', $today))
+                    ->orderByDesc('received_at')->orderByDesc('id')->lockForUpdate()->first();
+                if (! $batch) {
+                    $lastCost = (clone $lots)->latest('id')->value('unit_cost');
+                    $batch = InventoryBatch::create([
+                        'branch_id' => $ingredient->branch_id,
+                        'ingredient_id' => $ingredient->id,
+                        'lot_code' => 'AJUSTE-'.$ingredient->id.'-'.str_replace('-', '', $today),
+                        'received_at' => $today,
+                        'expires_at' => $ingredient->shelf_life_days ? $clock->today($ingredient->branch_id)->addDays((int) $ingredient->shelf_life_days)->toDateString() : null,
+                        'initial_quantity' => $quantity,
+                        'available_quantity' => 0,
+                        'unit_cost' => $lastCost ?? 0,
+                    ]);
+                }
+                $touched = [[$batch, $quantity]];
+            }
+
+            $adjustment = InventoryAdjustment::create([
+                'branch_id' => $ingredient->branch_id,
+                'ingredient_id' => $ingredient->id,
+                'inventory_batch_id' => count($touched) === 1 ? $touched[0][0]->id : null,
+                'user_id' => $r->user()->id,
+                'quantity' => $quantity,
+                'reason' => $data['reason'],
+                'comment' => $comment,
+            ]);
+            foreach ($touched as [$batch, $amount]) {
+                $service->move($batch, $quantity < 0 ? -$amount : $amount, $type, $r->user(), $adjustment, $data['reason'], $comment);
+            }
+            $service->refreshAlerts($ingredient);
+
+            return $adjustment;
+        });
+    }
+
     private function validateDirection(array $data): void
     {
         $quantity = (float) $data['quantity'];
@@ -187,16 +274,7 @@ class InventoryController extends Controller
 
     private function inventoryItemsQuery(Request $request, BranchClock $clock)
     {
-        $today = $clock->today($request->user()->branch_id)->toDateString();
-        $stockSql = 'COALESCE((SELECT SUM(available_quantity) FROM inventory_batches WHERE inventory_batches.ingredient_id = ingredients.id AND (expires_at IS NULL OR expires_at >= ?)), 0)';
-
-        return Ingredient::query()->with(['baseUnit', 'type'])
-            ->where('ingredients.branch_id', $request->user()->branch_id)
-            ->select('ingredients.*')
-            ->selectRaw("{$stockSql} AS current_stock", [$today])
-            ->selectRaw("CASE WHEN {$stockSql} <= 0 THEN 'out' WHEN {$stockSql} <= ingredients.critical_stock THEN 'critical' WHEN {$stockSql} <= ingredients.minimum_stock THEN 'low' ELSE 'available' END AS stock_status", [$today, $today, $today])
-            ->selectRaw("CASE WHEN ingredients.minimum_stock > ({$stockSql}) THEN ingredients.minimum_stock - ({$stockSql}) ELSE 0 END AS missing_to_minimum", [$today, $today])
-            ->selectSub(InventoryBatch::query()->select('expires_at')->whereColumn('ingredient_id', 'ingredients.id')->where('available_quantity', '>', 0)->whereNotNull('expires_at')->whereDate('expires_at', '>=', $today)->orderBy('expires_at')->limit(1), 'next_expiry');
+        return app(InventoryService::class)->stockQuery($request->user()->branch_id);
     }
 
     private function movementPayload(InventoryMovement $movement): array

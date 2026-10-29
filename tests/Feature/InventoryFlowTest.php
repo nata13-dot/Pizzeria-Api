@@ -243,6 +243,65 @@ class InventoryFlowTest extends TestCase
         $this->assertDatabaseCount('inventory_adjustments', 2);
     }
 
+    public function test_ingredient_adjustment_consumes_lots_fefo_without_choosing_a_lot(): void
+    {
+        $this->seed();
+        $user = User::where('email', 'admin@pizzeria.local')->firstOrFail();
+        Sanctum::actingAs($user);
+        $grams = Unit::where('symbol', 'g')->firstOrFail();
+        $ingredient = Ingredient::create(['branch_id' => $user->branch_id, 'base_unit_id' => $grams->id, 'name' => 'Queso para ajustes']);
+        $lot = fn (int $quantity, ?string $expires) => InventoryBatch::create([
+            'branch_id' => $user->branch_id, 'ingredient_id' => $ingredient->id, 'received_at' => today()->subDays(10),
+            'expires_at' => $expires, 'initial_quantity' => $quantity, 'available_quantity' => $quantity,
+        ]);
+        $expired = $lot(40, today()->subDay()->toDateString());
+        $soon = $lot(30, today()->addDays(2)->toDateString());
+        $later = $lot(50, today()->addDays(9)->toDateString());
+
+        $this->postJson('/api/inventory/adjustments', ['ingredient_id' => $ingredient->id, 'quantity' => -45, 'reason' => 'waste', 'comment' => 'Se cayó'])
+            ->assertCreated()->assertJsonPath('inventory_batch_id', null);
+        $this->assertEquals(40, $expired->fresh()->available_quantity);
+        $this->assertEquals(0, $soon->fresh()->available_quantity);
+        $this->assertEquals(35, $later->fresh()->available_quantity);
+        $this->assertDatabaseHas('inventory_movements', ['inventory_batch_id' => $later->id, 'reason' => 'waste', 'comment' => 'Se cayó']);
+
+        $this->postJson('/api/inventory/adjustments', ['ingredient_id' => $ingredient->id, 'quantity' => -36, 'reason' => 'loss'])
+            ->assertUnprocessable()->assertJsonValidationErrors('quantity');
+        $this->assertEquals(35, $later->fresh()->available_quantity);
+
+        $this->postJson('/api/inventory/adjustments', ['ingredient_id' => $ingredient->id, 'quantity' => -40, 'reason' => 'expiry'])->assertCreated();
+        $this->assertEquals(0, $expired->fresh()->available_quantity);
+        $this->assertEquals(35, $later->fresh()->available_quantity);
+
+        $this->postJson('/api/inventory/adjustments', ['ingredient_id' => $ingredient->id, 'quantity' => 5, 'reason' => 'correction'])->assertCreated();
+        $this->assertEquals(40, $later->fresh()->available_quantity);
+
+        $this->postJson('/api/inventory/adjustments', ['ingredient_id' => $ingredient->id, 'inventory_batch_id' => $later->id, 'quantity' => 5, 'reason' => 'correction'])
+            ->assertUnprocessable();
+    }
+
+    public function test_ingredient_adjustment_creates_a_lot_when_none_is_valid_and_rejects_expired_lot_additions(): void
+    {
+        $this->seed();
+        $user = User::where('email', 'admin@pizzeria.local')->firstOrFail();
+        Sanctum::actingAs($user);
+        $grams = Unit::where('symbol', 'g')->firstOrFail();
+        $ingredient = Ingredient::create(['branch_id' => $user->branch_id, 'base_unit_id' => $grams->id, 'name' => 'Harina sin lotes']);
+        $expired = InventoryBatch::create([
+            'branch_id' => $user->branch_id, 'ingredient_id' => $ingredient->id, 'received_at' => today()->subDays(10),
+            'expires_at' => today()->subDay()->toDateString(), 'initial_quantity' => 10, 'available_quantity' => 10, 'unit_cost' => 2,
+        ]);
+
+        $this->postJson('/api/inventory/adjustments', ['inventory_batch_id' => $expired->id, 'quantity' => 5, 'reason' => 'correction'])
+            ->assertUnprocessable()->assertJsonValidationErrors('quantity');
+
+        $this->postJson('/api/inventory/adjustments', ['ingredient_id' => $ingredient->id, 'quantity' => 12, 'reason' => 'manual'])->assertCreated();
+        $created = InventoryBatch::where('ingredient_id', $ingredient->id)->whereKeyNot($expired->id)->firstOrFail();
+        $this->assertEquals(12, $created->available_quantity);
+        $this->assertEquals(2, $created->unit_cost);
+        $this->assertEquals(10, $expired->fresh()->available_quantity);
+    }
+
     public function test_purchase_rejects_future_or_incoherent_dates(): void
     {
         $this->seed();
