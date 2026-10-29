@@ -84,6 +84,8 @@ Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function ():
     Route::get('/recipes/destinations', [RecipeController::class, 'destinations'])->middleware('permission:admin.only');
     Route::get('/recipes/destinations/{variant}', [RecipeController::class, 'destination'])->middleware('permission:admin.only');
     Route::post('/recipes', [RecipeController::class, 'store'])->middleware('permission:admin.only');
+    Route::post('/recipes/batch', [RecipeController::class, 'batch'])->middleware('permission:admin.only');
+    Route::post('/recipes/base-split', [RecipeController::class, 'baseSplit'])->middleware('permission:admin.only');
     Route::get('/recipes/{recipe}', [RecipeController::class, 'show'])->middleware('permission:admin.only');
     Route::match(['put', 'patch'], '/recipes/{recipe}', [RecipeController::class, 'update'])->middleware('permission:admin.only');
     Route::delete('/recipes/{recipe}', [RecipeController::class, 'destroy'])->middleware('permission:admin.only');

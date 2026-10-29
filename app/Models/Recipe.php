@@ -6,11 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class Recipe extends Model
 {
-    protected $fillable = ['product_variant_id', 'product_flavor_id', 'name', 'active'];
+    protected $fillable = ['product_variant_id', 'product_flavor_id', 'applies_to_flavors', 'base_only', 'name', 'active'];
 
     protected function casts(): array
     {
-        return ['active' => 'boolean'];
+        return ['active' => 'boolean', 'applies_to_flavors' => 'boolean', 'base_only' => 'boolean'];
     }
 
     public function items()

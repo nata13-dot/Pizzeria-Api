@@ -49,12 +49,13 @@ class RecipeResolver
             throw ValidationException::withMessages(['flavors' => 'Esta variante no permite mitad y mitad.']);
         }
 
-        $recipes = $variant->relationLoaded('recipes')
-            ? $variant->recipes->where('active', true)->filter(fn ($recipe) => $flavorIds
-                ? in_array($recipe->product_flavor_id, $flavorIds, true)
-                : $recipe->product_flavor_id === null)->values()
-            : Recipe::query()->with('items.ingredient')->where('product_variant_id', $variant->id)->where('active', true)
-                ->when($flavorIds, fn ($query) => $query->whereIn('product_flavor_id', $flavorIds), fn ($query) => $query->whereNull('product_flavor_id'))->get();
+        $active = $variant->relationLoaded('recipes')
+            ? $variant->recipes->where('active', true)->values()
+            : Recipe::query()->with('items.ingredient')->where('product_variant_id', $variant->id)->where('active', true)->get();
+        $base = $flavorIds ? $active->first(fn ($recipe) => $recipe->product_flavor_id === null && $recipe->applies_to_flavors) : null;
+        $recipes = $active->filter(fn ($recipe) => $flavorIds
+            ? in_array($recipe->product_flavor_id, $flavorIds, true)
+            : $recipe->product_flavor_id === null && ! $recipe->applies_to_flavors)->values();
 
         if ($recipes->isEmpty()) {
             $message = $flavorIds
@@ -67,8 +68,13 @@ class RecipeResolver
                 'recipe' => 'Falta una receta activa para uno de los sabores seleccionados.',
             ]);
         }
+        if (! $base && $recipes->contains(fn ($recipe) => $recipe->base_only)) {
+            throw ValidationException::withMessages([
+                'recipe' => 'Un sabor usa solo la base, pero este tamaño no tiene una base activa.',
+            ]);
+        }
 
-        foreach ($recipes->flatMap->items as $item) {
+        foreach ($recipes->concat($base ? [$base] : [])->flatMap->items as $item) {
             if (! $item->ingredient?->active || $item->ingredient?->branch_id !== $variant->product->branch_id) {
                 throw ValidationException::withMessages([
                     'recipe' => 'La receta contiene un insumo inactivo o de otra sucursal.',
@@ -82,7 +88,15 @@ class RecipeResolver
                 + (float) $item->quantity * $factor;
         };
 
-        if ($recipes->count() === 1) {
+        if ($base) {
+            // Shared base is consumed once; each flavor's extras are split among the chosen flavors.
+            $base->items->each(fn ($item) => $add($item));
+            foreach ($recipes as $recipe) {
+                foreach ($recipe->items as $item) {
+                    $add($item, 1 / $recipes->count());
+                }
+            }
+        } elseif ($recipes->count() === 1) {
             $recipes->first()->items->each(fn ($item) => $add($item));
         } elseif ($variant->product->type === 'pizza') {
             foreach ($recipes->first()->items->whereIn('component', ['base', 'sauce', 'packaging']) as $item) {

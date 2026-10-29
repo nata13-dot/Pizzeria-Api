@@ -47,7 +47,7 @@ class ProductController extends Controller
                     ->select(['id', 'product_id', 'name', 'price', 'max_flavors', 'required_flavors', 'allows_half_and_half', 'allows_stuffed_crust', 'active'])
                     ->where('active', true),
                 'variants.recipes' => fn (Relation $query) => $query
-                    ->select(['id', 'product_variant_id', 'product_flavor_id', 'active'])
+                    ->select(['id', 'product_variant_id', 'product_flavor_id', 'applies_to_flavors', 'active'])
                     ->where('active', true),
                 'variants.modifierRules' => fn (Relation $query) => $query
                     ->select(['id', 'product_variant_id', 'modifier_id', 'allowed', 'price_override'])
@@ -60,7 +60,7 @@ class ProductController extends Controller
             ->each(function (Product $product): void {
                 foreach ($product->variants as $variant) {
                     $variant->setAttribute('available_flavor_ids', $variant->recipes->pluck('product_flavor_id')->filter()->unique()->values()->all());
-                    $variant->setAttribute('has_base_recipe', $variant->recipes->contains(fn ($recipe) => $recipe->product_flavor_id === null));
+                    $variant->setAttribute('has_base_recipe', $variant->recipes->contains(fn ($recipe) => $recipe->product_flavor_id === null && ! $recipe->applies_to_flavors));
                     $variant->unsetRelation('recipes');
                 }
             })
