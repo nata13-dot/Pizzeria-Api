@@ -106,6 +106,7 @@ Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function ():
     Route::delete('/combos/{combo}', [ComboController::class, 'destroy'])->middleware('permission:admin.only');
     Route::get('/orders', [OrderController::class, 'index'])->middleware('permission:orders.view');
     Route::post('/orders', [OrderController::class, 'store'])->middleware('permission:pos.use');
+    Route::get('/pos/customers', [CustomerController::class, 'posLookup'])->middleware('permission:pos.use');
     Route::get('/pos/customers/{customer}', [CustomerController::class, 'posCustomer'])->middleware('permission:pos.use');
     Route::get('/orders/operation', [OrderController::class, 'operation'])->middleware('permission:pos.use');
     Route::get('/orders/{order}', [OrderController::class, 'show'])->middleware('permission:orders.view');

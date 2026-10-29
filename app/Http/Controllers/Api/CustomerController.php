@@ -23,6 +23,19 @@ class CustomerController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    /** Phone lookup for the register: active customers only, no history or points. */
+    public function posLookup(Request $request)
+    {
+        $data = $request->validate(['phone' => 'required|string|min:3|max:30']);
+        $digits = preg_replace('/\D+/', '', $data['phone']);
+        abort_if(strlen($digits) < 3, 422, 'Escribe al menos tres dígitos del teléfono.');
+
+        return response()->json(Customer::with('addresses')->where('branch_id', $request->user()->branch_id)->where('active', true)
+            ->whereRaw("REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ?", ['%'.$digits.'%'])->orderBy('name')->limit(5)->get()
+            ->map(fn (Customer $customer) => $customer->only(['id', 'name', 'phone', 'active', 'addresses']))->all())
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function index(Request $request)
     {
         $filters = $request->validate([

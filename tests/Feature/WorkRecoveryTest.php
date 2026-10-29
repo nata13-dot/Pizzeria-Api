@@ -56,4 +56,22 @@ class WorkRecoveryTest extends TestCase
         Sanctum::actingAs(User::where('email', 'cocina@pizzeria.local')->firstOrFail());
         $this->getJson('/api/orders/operation?key=pos-recovery-test')->assertForbidden();
     }
+
+    public function test_register_finds_customers_by_phone_without_customer_management_permission(): void
+    {
+        $this->seed();
+        $cashier = User::where('email', 'cajero@pizzeria.local')->firstOrFail();
+        $cashier->role->permissions()->detach(\App\Models\Permission::where('slug', 'customers.manage')->value('id'));
+        Sanctum::actingAs($cashier->fresh());
+        $ana = Customer::create(['branch_id' => $cashier->branch_id, 'name' => 'Ana', 'phone' => '222-555 0101']);
+        $ana->addresses()->create(['label' => 'Casa', 'address' => 'Centro']);
+        Customer::create(['branch_id' => $cashier->branch_id, 'name' => 'Inactivo', 'phone' => '2225550101', 'active' => false]);
+        $other = Branch::create(['name' => 'Otra', 'code' => 'LOOKUP']);
+        Customer::create(['branch_id' => $other->id, 'name' => 'Otra sucursal', 'phone' => '2225550101']);
+
+        $this->getJson('/api/customers?search=222')->assertForbidden();
+        $this->getJson('/api/pos/customers?phone=(222) 5550101')->assertOk()->assertJsonCount(1)
+            ->assertJsonPath('0.name', 'Ana')->assertJsonCount(1, '0.addresses')->assertJsonMissingPath('0.points_balance');
+        $this->getJson('/api/pos/customers?phone=22')->assertUnprocessable();
+    }
 }
