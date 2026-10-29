@@ -13,7 +13,9 @@ use App\Models\Unit;
 use App\Services\BranchClock;
 use App\Services\InventoryService;
 use App\Services\Money;
+use App\Services\PurchaseCosts;
 use App\Services\PurchasePresentationRevision;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -24,18 +26,25 @@ class PurchaseController extends Controller
 {
     public function index(Request $r)
     {
-        return Purchase::with(['supplier', 'items.ingredient', 'items.presentation'])->where('branch_id', $r->user()->branch_id)->latest('purchased_at')->paginate(25);
+        return Purchase::with(['supplier', 'items.ingredient.baseUnit', 'items.presentation.equivalentUnit'])->where('branch_id', $r->user()->branch_id)->latest('purchased_at')->paginate(25);
     }
 
     public function show(Request $r, Purchase $purchase)
     {
         abort_unless($purchase->branch_id === $r->user()->branch_id, 404);
 
-        return $purchase->load(['supplier', 'items.ingredient', 'items.presentation']);
+        return $purchase->load(['supplier', 'items.ingredient.baseUnit', 'items.presentation.equivalentUnit']);
     }
 
     public function store(Request $r, InventoryService $inventory, BranchClock $clock, PurchasePresentationRevision $revisions)
     {
+        $key = $r->header('Idempotency-Key');
+        if ($key !== null) {
+            validator(['idempotency_key' => $key], ['idempotency_key' => 'required|string|min:8|max:100|regex:/^[A-Za-z0-9._:-]+$/'])->validate();
+            if ($replay = $this->replay($r, $key)) {
+                return $replay;
+            }
+        }
         $data = $r->validate([
             'supplier_id' => [
                 'nullable',
@@ -63,7 +72,29 @@ class PurchaseController extends Controller
                 'purchased_at' => 'La fecha de compra no puede ser futura en la zona horaria de la sucursal.',
             ]);
         }
-        $purchase = DB::transaction(function () use ($r, $data, $inventory, $revisions) {
+        try {
+            $purchase = $this->createPurchase($r, $data, $inventory, $revisions, $key);
+        } catch (UniqueConstraintViolationException $exception) {
+            // A concurrent retry with the same key won the race; answer with its purchase.
+            if ($key !== null && ($replay = $this->replay($r, $key))) {
+                return $replay;
+            }
+            throw $exception;
+        }
+
+        return response()->json($purchase->load(['supplier', 'items.ingredient.baseUnit', 'items.presentation.equivalentUnit']), 201);
+    }
+
+    private function replay(Request $r, string $key)
+    {
+        $existing = Purchase::query()->where('branch_id', $r->user()->branch_id)->where('idempotency_key', $key)->first();
+
+        return $existing ? response()->json($existing->load(['supplier', 'items.ingredient.baseUnit', 'items.presentation.equivalentUnit']))->header('Idempotent-Replay', 'true') : null;
+    }
+
+    private function createPurchase(Request $r, array $data, InventoryService $inventory, PurchasePresentationRevision $revisions, ?string $key): Purchase
+    {
+        return DB::transaction(function () use ($r, $data, $inventory, $revisions, $key) {
             if ($data['payment_source'] === 'cash') {
                 $cashDay = CashDay::query()
                     ->where('branch_id', $r->user()->branch_id)
@@ -160,7 +191,7 @@ class PurchaseController extends Controller
                 }
             }
 
-            $purchase = Purchase::create(['branch_id' => $r->user()->branch_id, 'supplier_id' => $data['supplier_id'] ?? null, 'user_id' => $r->user()->id, 'purchased_at' => $data['purchased_at'], 'payment_source' => $data['payment_source'], 'notes' => $data['notes'] ?? null, 'total' => Money::sum(collect($data['items'])->pluck('total_cost'))]);
+            $purchase = Purchase::create(['branch_id' => $r->user()->branch_id, 'supplier_id' => $data['supplier_id'] ?? null, 'user_id' => $r->user()->id, 'idempotency_key' => $key, 'purchased_at' => $data['purchased_at'], 'payment_source' => $data['payment_source'], 'notes' => $data['notes'] ?? null, 'total' => Money::sum(collect($data['items'])->pluck('total_cost'))]);
             foreach ($data['items'] as $row) {
                 $row['total_cost'] = Money::normalize($row['total_cost']);
                 /** @var IngredientPresentation $presentation */
@@ -176,7 +207,41 @@ class PurchaseController extends Controller
 
             return $purchase;
         });
+    }
 
-        return response()->json($purchase->load(['supplier', 'items.ingredient', 'items.presentation']), 201);
+    /** Ingredients below their minimum with a suggested presentation and amount to reach it. */
+    public function suggestions(Request $r, InventoryService $inventory, PurchasePresentationRevision $revisions, PurchaseCosts $costs)
+    {
+        $branchId = $r->user()->branch_id;
+        $rows = $inventory->stockQuery($branchId)->where('ingredients.active', true)->where('ingredients.minimum_stock', '>', 0)
+            ->with(['presentations' => fn ($q) => $q->where('active', true)->orderBy('base_quantity'), 'presentations.equivalentUnit'])
+            ->orderBy('ingredients.name')->get()
+            ->filter(fn ($row) => (float) $row->missing_to_minimum > 0.00001)
+            ->sortBy(fn ($row) => ['out' => 0, 'critical' => 1, 'low' => 2][$row->stock_status] ?? 3)
+            ->take(60)->values();
+        $last = $costs->lastUnitCosts($branchId, $rows->flatMap(fn ($row) => $row->presentations->pluck('id'))->all());
+        $lastUsed = \App\Models\PurchaseItem::query()->join('purchases', 'purchases.id', '=', 'purchase_items.purchase_id')
+            ->where('purchases.branch_id', $branchId)->whereIn('purchase_items.ingredient_id', $rows->pluck('id'))
+            ->orderByDesc('purchases.purchased_at')->orderByDesc('purchase_items.id')
+            ->get(['purchase_items.ingredient_id', 'purchase_items.ingredient_presentation_id'])->unique('ingredient_id')
+            ->pluck('ingredient_presentation_id', 'ingredient_id');
+
+        return ['data' => $rows->map(function (Ingredient $row) use ($revisions, $last, $lastUsed) {
+            $presentations = $row->presentations->filter(fn ($p) => $p->equivalentUnit && (float) $p->base_quantity > 0)->values();
+            $presentations->each(function (IngredientPresentation $p) use ($row, $revisions, $last): void {
+                if ($row->baseUnit) {
+                    $p->setAttribute('purchase_revision', $revisions->make($p, $row, $p->equivalentUnit, $row->baseUnit));
+                }
+                $p->setAttribute('last_unit_cost', $last[$p->id] ?? null);
+            });
+            $chosen = $presentations->firstWhere('id', $lastUsed[$row->id] ?? null) ?? $presentations->first();
+
+            return [
+                'ingredient' => $row->only(['id', 'name', 'sku', 'base_unit_id', 'current_stock', 'minimum_stock', 'missing_to_minimum', 'stock_status']) + ['base_unit' => $row->baseUnit],
+                'presentations' => $presentations->all(),
+                'suggested_presentation_id' => $chosen?->id,
+                'suggested_quantity' => $chosen ? (int) ceil(((float) $row->missing_to_minimum - 0.00001) / (float) $chosen->base_quantity) : null,
+            ];
+        })->all()];
     }
 }

@@ -46,6 +46,7 @@ Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function ():
     Route::delete('/ingredients/{ingredient}/presentations/{presentation}', [IngredientController::class, 'destroyPresentation'])->middleware('permission:admin.only');
     Route::get('/purchases', [PurchaseController::class, 'index'])->middleware('permission:purchases.manage');
     Route::post('/purchases', [PurchaseController::class, 'store'])->middleware('permission:purchases.manage');
+    Route::get('/purchases/suggestions', [PurchaseController::class, 'suggestions'])->middleware('permission:purchases.manage');
     Route::get('/purchases/{purchase}', [PurchaseController::class, 'show'])->middleware('permission:purchases.manage');
     Route::get('/inventory/summary', [InventoryController::class, 'summary'])->middleware('permission:inventory.view');
     Route::get('/inventory/items', [InventoryController::class, 'items'])->middleware('permission:inventory.view');

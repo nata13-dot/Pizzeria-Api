@@ -67,6 +67,8 @@ class IngredientController extends Controller
 
         $ingredient->load(['baseUnit', 'type', 'presentations.equivalentUnit', 'batches']);
         $this->appendPurchaseRevisions($ingredient, $revisions);
+        $last = app(\App\Services\PurchaseCosts::class)->lastUnitCosts($ingredient->branch_id, $ingredient->presentations->pluck('id')->all());
+        $ingredient->presentations->each(fn ($presentation) => $presentation->setAttribute('last_unit_cost', $last[$presentation->id] ?? null));
 
         return $ingredient;
     }
