@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\IngredientController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\ModifierController;
 use App\Http\Controllers\Api\NavigationController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\OperationalSettingsController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ProductConfigurationController;
@@ -30,6 +31,7 @@ Route::get('/database-backups/download', [DatabaseBackupController::class, 'down
 Route::middleware(['auth:sanctum', EnsureActiveUser::class])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
     Route::get('/navigation/badges', [NavigationController::class, 'badges']);
+    Route::get('/dashboard', [DashboardController::class, 'show']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/preferences', [UserController::class, 'preferences']);
     Route::put('/preferences', [UserController::class, 'updatePreferences']);
